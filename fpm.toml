@@ -5,7 +5,7 @@ description = "Aura - cross-platform AI-enhanced terminal emulator in modern For
 
 [build]
 auto-exe-cut = false
-link = ["user32", "kernel32"]   # harmless on Unix; needed for ConPTY bridge on Windows
+link = ["user32", "kernel32", "ws2_32"]   # harmless on Unix; needed for ConPTY bridge on Windows
 
 [dependencies]
 # json-fortran is vendored via fpm when network is available:

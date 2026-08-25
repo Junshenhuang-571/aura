@@ -11,7 +11,7 @@ module aura_pty
     implicit none
     private
 
-    public :: pty_spawn, pty_read, pty_write, pty_resize, pty_close
+    public :: pty_spawn, pty_read, pty_write, pty_write_bytes, pty_write_text, pty_resize, pty_close
 
     interface
         ! returns 0 on success; fills handle + initial pid token
@@ -88,6 +88,32 @@ contains
         integer(i4) :: rc
         rc = int(c_pty_write(handle, f_cstr(text // achar(13)//achar(10)), &
                              int(len_trim(text) + 2, c_int)), i4)
+    end function
+
+    ! Write raw bytes (no CR/LF appended) — used by the key pass-through.
+    function pty_write_bytes(handle, bytes, nbytes) result(rc)
+        integer(c_long_long), intent(in) :: handle
+        character(len=1), intent(in) :: bytes(:)
+        integer, intent(in) :: nbytes
+        integer(i4) :: rc
+        rc = int(c_pty_write(handle, c_bytes(bytes, nbytes), int(nbytes, c_int)), i4)
+    end function
+
+    function pty_write_text(handle, text) result(rc)
+        integer(c_long_long), intent(in) :: handle
+        character(len=*), intent(in) :: text
+        integer(i4) :: rc
+        rc = int(c_pty_write(handle, f_cstr(text), int(len_trim(text), c_int)), i4)
+    end function
+
+    pure function c_bytes(b, n) result(cs)
+        integer, intent(in) :: n
+        character(len=1), intent(in) :: b(:)
+        character(kind=c_char) :: cs(n)
+        integer :: i
+        do i = 1, n
+            cs(i) = b(i)
+        end do
     end function
 
     subroutine pty_resize(handle, cols, rows)

@@ -1,207 +1,434 @@
-! aura.f90 — Aura: AI-enhanced terminal (MVP)
+! aura.f90 (phase B) — TUI terminal emulator event loop.
 !
-! Modes:
-!   aura            -> interactive CLI terminal (works everywhere, no GTK needed)
-!   aura --gui      -> GTK GUI when gtk-fortran is linked (falls back to CLI)
-!   aura --ask "…"  -> one-shot AI query using last session context
-!   aura --config   -> write default config to ~/.config/aura/config.json
+!   aura            -> full-screen terminal (raw keys, streaming grid render)
+!   aura --cli      -> legacy line-based mode (debugging)
+!   aura --ask "…"  -> one-shot AI query
+!   aura --config   -> write default config
 program aura_main
     use iso_fortran_env, only: i4 => int32
     use iso_c_binding, only: c_long_long
     use aura_ansi
     use aura_session
     use aura_pty
-    use aura_llm
+    use aura_keys
+    use aura_render
+    use aura_ai
     use aura_config
-    use aura_gui
     implicit none
 
-    character(len=4096) :: arg1, question_arg
+    integer, parameter :: MAX_SESS = 8
+    integer(i4), parameter :: GRID_ROWS = 30, GRID_COLS = 100
+
+    type(term_session), allocatable :: sess(:)      ! heap: big arrays inside
+    integer(c_long_long), allocatable :: handle(:)
+    character(len=32), allocatable :: titles(:)
+    integer :: n_sess, active
+    logical :: scroll_mode
+    integer :: scroll_top
     type(aura_cfg) :: cfg
-    integer :: narg, rc
-    logical :: want_gui
+    integer :: con_cols, con_rows
+    integer(i4) :: rc_dummy
 
-    narg = command_argument_count()
-    call get_command_argument(1, arg1)
-    if (narg == 0) then
-        want_gui = .false.
-    else
-        want_gui = (trim(arg1) == '--gui')
-        question_arg = ''
-        if (trim(arg1) == '--ask' .and. narg >= 2) call get_command_argument(2, question_arg)
-    end if
+    n_sess = 0; active = 0; scroll_mode = .false.; scroll_top = 1
+    con_cols = 100; con_rows = 30
+    rc_dummy = 0
+    allocate(sess(MAX_SESS), handle(MAX_SESS), titles(MAX_SESS))
 
-    ! Load (or initialize) configuration
-    call cfg%load()
-    if (trim(arg1) == '--config' .or. narg == -1) then
-        call cfg%save()
-        print *, 'Config written to ', config_dir_path(), '/config.json'
-        stop 0
-    end if
-
-    if (want_gui) then
-        rc = gui_main(cfg)
-        if (rc <= 0) then
-            print *, 'Running in CLI mode instead.'
-            call run_cli(cfg)
+    ! ---- dispatch on args ----
+    block
+        character(len=4096) :: arg1
+        character(len=2048) :: q
+        if (command_argument_count() >= 1) then
+            call get_command_argument(1, arg1)
+            select case (trim(arg1))
+            case ('--config')
+                call cfg%load(); call cfg%save()
+                print *, 'Config written.'
+                stop 0
+            case ('--cli')
+                call run_legacy_cli()
+                stop 0
+            case ('--ask')
+                q = ''
+                if (command_argument_count() >= 2) call get_command_argument(2, q)
+                print *, trim(ai_query(trim(q), '', '.'))
+                stop 0
+            end select
         end if
-    else if (narg >= 2 .and. trim(arg1) == '--ask') then
-        call run_ask(cfg, trim(question_arg))
-    else
-        call run_cli(cfg)
+    end block
+
+    ! ---- boot TUI ----
+    call cfg%load()
+    call spawn_session(cfg%shell_path)
+    if (n_sess == 0) then
+        print *, 'ERROR: could not spawn shell "', trim(cfg%shell_path), '"'
+        stop 1
     end if
+
+    call keys_raw_enter()
+    call tui_loop()
+    call keys_raw_exit()
+
+    do active = 1, n_sess
+        if (sess(active)%alive) call pty_close(handle(active))
+    end do
+    print *, 'Aura closed.'
 
 contains
 
-    ! ------------------------------------------------------------------
-    ! One-shot AI ask: spawns a throwaway session context is not possible,
-    ! so we answer with cwd + a fresh shell probe of the last output dir.
-    subroutine run_ask(cfg, q)
-        type(aura_cfg), intent(inout) :: cfg
-        character(len=*), intent(in) :: q
-        character(len=:), allocatable :: answer, ctx
-        character(len=512) :: cwd
-        integer(i4) :: rc
+    ! Legacy line-based mode kept for debugging / non-TTY environments.
+    subroutine run_legacy_cli()
+        use iso_c_binding, only: c_long_long
+        type(term_session) :: s
+        character(len=2048) :: userline
         integer(c_long_long) :: h
+        integer(i4) :: rc
         character(len=:), allocatable :: buf
-        type(term_session) :: sess
+        logical :: alive
 
-        call get_environment_variable('PWD', cwd)
-        if (len_trim(cwd) == 0) call get_environment_variable('CD', cwd)
-
-        ! quick context probe: run a directory listing in the PTY and read briefly
-        call blank_session(sess)
-        rc = pty_spawn('ls -la 2>nul || dir', 80, 24, h)
-        ctx = ''
-        if (rc == 0) then
-            call drain(sess, h, 700)
-            ctx = sess%last_lines(15)
-            call pty_close(h)
+        call init_blank(s)
+        if (pty_spawn(trim(cfg%shell_path), GRID_COLS, GRID_ROWS, h) /= 0) then
+            print *, 'ERROR: cannot spawn ', trim(cfg%shell_path)
+            return
         end if
-
-        answer = ai_ask(q, ctx, trim(cwd))
-        print *, '--- Aura AI ---'
-        print *, trim(answer)
-        print *, '---------------'
+        s%alive = .true.
+        alive = .true.
+        print *, 'Aura legacy CLI — /exit quits.'
+        do while (alive)
+            do
+                rc = pty_read(h, buf)
+                if (rc < 0) then
+                    alive = .false.; exit
+                else if (rc > 0) then
+                    write (*, '(A)', advance='no') buf
+                else
+                    exit
+                end if
+            end do
+            if (.not. alive) exit
+            read (*, '(A)', iostat=rc) userline
+            if (rc /= 0) exit
+            userline = adjustl(userline)
+            if (userline(1:5) == '/exit') exit
+            if (len_trim(userline) > 0) rc = pty_write(h, trim(userline))
+        end do
+        call pty_close(h)
     end subroutine
 
-    ! ------------------------------------------------------------------
-    ! Interactive CLI terminal: PTY loop with line-based local input,
-    ! ANSI-parsed screen rendering, /ai command for the assistant.
-    subroutine run_cli(cfg)
-        type(aura_cfg), intent(inout) :: cfg
-        type(term_session) :: sess
-        character(len=4096) :: cmdline
-        character(len=2048) :: userline, q
-        integer(i4) :: rc
-        integer(c_long_long) :: h
-        character(len=:), allocatable :: buf
+    subroutine tui_loop()
+        logical :: running
+        type(key_event) :: ev
 
-        cmdline = trim(cfg%shell_path)
-        if (len_trim(cmdline) == 0) cmdline = default_shell()
+        running = .true.
+        do while (running)
+            ! 1. pump all sessions
+            do active = 1, n_sess
+                if (sess(active)%alive) call drain_session(sess(active), handle(active), 5)
+            end do
+            active = max(1, min(active, n_sess))
 
-        print *, 'Aura terminal (MVP) — shell: ', trim(cmdline)
-        print *, 'Type commands normally; /ai <question> asks the assistant; /exit quits.'
-        print *
+            call con_get_size_f(con_cols, con_rows)
 
-        call blank_session(sess)
-        rc = pty_spawn(cmdline, 100, 30, h)
-        if (rc /= 0) then
-            print *, 'ERROR: failed to spawn shell "', trim(cmdline), '"'
-            stop 1
-        end if
-        sess%alive = .true.
-
-        do while (sess%alive)
-            ! pump any pending PTY output
-            call drain(sess, h, 120)
-            call render(sess)
-
-            if (.not. sess%alive) exit
-            read (*, '(A)', iostat=rc) userline
-            if (rc /= 0) exit                       ! stdin closed
-            userline = adjustl(userline)
-
-            if (userline(1:5) == '/exit') exit
-            if (userline(1:3) == '/ai') then
-                q = userline(4:)
-                call handle_ai(sess, h, trim(q))
-                cycle
+            ! 2. render
+            if (.not. scroll_mode) then
+                call render_grid(sess(active)%screen)
+            else
+                call render_scrollback_view(sess(active)%scrollback, &
+                    int(sess(active)%n_lines), scroll_top, con_rows, con_cols)
             end if
-            if (len_trim(userline) > 0) then
-                if (pty_write(h, trim(userline)) < 0) exit
+            call render_status_line(n_sess, active, titles(:n_sess), scroll_mode, con_cols)
+
+            ! 3. key event
+            if (poll_key(30, ev)) then
+                select case (ev%kind)
+                case (KEV_RESIZE)
+                    call invalidate_mirror()
+                case (KEV_CHAR)
+                    if (is_reserved(ev)) then
+                        running = handle_reserved(ev)
+                    else if (scroll_mode) then
+                        scroll_mode = .false.
+                        call invalidate_mirror()
+                    else
+                        call send_key_vt(ev, handle(active))
+                    end if
+                case (KEV_SPECIAL)
+                    select case (ev%special)
+                    case (KEY_PGUP)
+                        call do_scroll(-10)
+                    case (KEY_PGDN)
+                        call do_scroll(+10)
+                    case default
+                        if (.not. scroll_mode) call send_key_vt(ev, handle(active))
+                    end select
+                end select
+            end if
+
+            ! 4. reap dead active session
+            if (.not. sess(active)%alive) then
+                call pty_close(handle(active))
+                call remove_session(active)
+                if (n_sess == 0) running = .false.
             end if
         end do
-
-        call pty_close(h)
-        print *, 'Bye.'
     end subroutine
 
-    subroutine blank_session(s)
+    logical function is_reserved(ev) result(r)
+        type(key_event), intent(in) :: ev
+        r = .false.
+        if (ev%ctrl .and. ev%codepoint >= iachar('a') .and. ev%codepoint <= iachar('z')) then
+            select case (ev%codepoint)
+            case (iachar('t'), iachar('w'), iachar('a'))
+                r = ev%shift .eqv. (ev%codepoint == iachar('A'))   ! placeholder, refined below
+                r = (ev%codepoint /= iachar('a')) .or. ev%shift
+                ! Ctrl+T new, Ctrl+W close; Ctrl+Shift+A handled here too
+                if (ev%codepoint == iachar('t') .or. ev%codepoint == iachar('w')) r = .true.
+                if (ev%codepoint == iachar('a')) r = ev%shift
+            end select
+        else if (ev%ctrl .and. ev%codepoint == 9) then
+            r = .true.      ! Ctrl+I (Tab with ctrl on some consoles) unused
+        end if
+    end function
+
+    logical function handle_reserved(ev) result(keep_running)
+        type(key_event), intent(in) :: ev
+        keep_running = .true.
+
+        ! Ctrl+Shift+A -> AI drawer
+        if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('A')) then
+            call ai_drawer()
+            return
+        end if
+        ! Ctrl+Tab -> cycle session (Tab char code 9 arrives when Ctrl+Tab pressed
+        ! in Windows console as ctrl+char 9? we also accept plain detection below)
+        if (ev%ctrl .and. ev%codepoint == 9) then
+            active = mod(active, n_sess) + 1
+            scroll_mode = .false.
+            call invalidate_mirror()
+            return
+        end if
+        if (ev%ctrl .and. ev%codepoint == iachar('t')) then
+            if (n_sess < MAX_SESS) then
+                call spawn_session(cfg%shell_path)
+                call invalidate_mirror()
+            end if
+            return
+        end if
+        if (ev%ctrl .and. ev%codepoint == iachar('w')) then
+            if (sess(active)%alive) then
+                call pty_close(handle(active))
+                sess(active)%alive = .false.
+            end if
+        end if
+    end function
+
+    subroutine send_key_vt(ev, h)
+        type(key_event), intent(in) :: ev
+        integer(c_long_long), intent(in) :: h
+        character(len=1) :: vt(16)
+        integer :: nvt
+        call key_to_vt(ev, vt, nvt)
+        if (nvt > 0) then
+            rc_dummy = pty_write_bytes(h, vt, nvt)
+        end if
+    end subroutine
+
+    subroutine do_scroll(delta)
+        integer, intent(in) :: delta
+        integer :: maxtop, vis
+        vis = con_rows - 2
+        maxtop = max(1, int(sess(active)%n_lines) - vis + 1)
+        if (.not. scroll_mode) then
+            scroll_mode = .true.
+            scroll_top = max(1, int(sess(active)%n_lines) - vis + 1)
+            return
+        end if
+        scroll_top = min(max(1, scroll_top + delta), maxtop)
+    end subroutine
+
+    subroutine spawn_session(shellcmd)
+        character(len=*), intent(in) :: shellcmd
+        if (n_sess >= MAX_SESS) return
+        call init_blank(sess(n_sess + 1))
+        if (pty_spawn(shellcmd, GRID_COLS, GRID_ROWS, handle(n_sess + 1)) /= 0) return
+        n_sess = n_sess + 1
+        sess(n_sess)%alive = .true.
+        write (titles(n_sess), '(A,I0)') 'shell', n_sess
+        active = n_sess
+    end subroutine
+
+    subroutine remove_session(idx)
+        integer, intent(in) :: idx
+        integer :: j
+        do j = idx, MAX_SESS - 1
+            sess(j) = sess(j + 1)
+            handle(j) = handle(j + 1)
+            titles(j) = titles(j + 1)
+        end do
+        n_sess = n_sess - 1
+        if (active > n_sess) active = max(1, n_sess)
+        call invalidate_mirror()
+    end subroutine
+
+    subroutine init_blank(s)
         type(term_session), intent(inout) :: s
         s%n_lines = 0
         s%pending = ''
         s%input_line = ''
         s%cwd = ''
-        call s%screen%resize(30_i4, 100_i4)
+        s%alive = .false.
+        call s%screen%resize(GRID_ROWS, GRID_COLS)
     end subroutine
 
-    subroutine drain(sess, h, ms_budget)
-        type(term_session), intent(inout) :: sess
+    subroutine drain_session(s, h, ms_budget)
+        type(term_session), intent(inout) :: s
         integer(c_long_long), intent(in) :: h
         integer, intent(in) :: ms_budget
         character(len=:), allocatable :: buf
-        integer :: spins, got
-        real :: t0, t1, dt
-        integer :: clock0, clock1, rate
-
-        call system_clock(clock0, rate)
+        integer :: got, c0, c1, rate
+        call system_clock(c0, rate)
         do
             got = pty_read(h, buf)
             if (got < 0) then
-                sess%alive = .false.
-                return
-            end if
-            if (got > 0) then
-                call sess%append_output(buf)
-                call system_clock(clock0, rate)     ! reset idle timer on data
+                s%alive = .false.; return
+            else if (got > 0) then
+                call s%append_output(buf)
+                call system_clock(c0, rate)
             else
-                call system_clock(clock1)
-                if (real(clock1 - clock0)/real(rate)*1000.0 > real(ms_budget)) return
+                call system_clock(c1)
+                if (real(c1-c0)/real(rate)*1000.0 > real(ms_budget)) return
             end if
         end do
     end subroutine
 
-    subroutine render(sess)
-        type(term_session), intent(inout) :: sess
-        character(len=:), allocatable :: txt
-        txt = sess%render_text()
-        if (len_trim(txt) > 0) print *, txt
+    ! ---- AI drawer ----
+    subroutine ai_drawer()
+        character(len=1024) :: qlin
+        character(len=:), allocatable :: answer, cmdline
+        integer :: drawer_top, ln
+        character(len=512) :: cwdv
+        logical :: done, want_insert, want_exec, keep_open
+        type(key_event) :: aev
+
+        call get_environment_variable('PWD', cwdv)
+        if (len_trim(cwdv) == 0) call get_environment_variable('CD', cwdv)
+
+        drawer_top = max(1, con_rows - 8)
+        call draw_hline(drawer_top, con_cols)
+        call con_write_at_f(2, drawer_top, '[ Ask Aura - question, Enter; Esc cancels ]')
+        qlin = ''
+        done = .false.
+        do while (.not. done)
+            call con_write_at_f(3, drawer_top + 2, '> '//trim(qlin)//'_                       ')
+            if (.not. poll_key(-1, aev)) cycle
+            if (aev%kind /= KEV_CHAR) cycle
+            if (aev%codepoint == 27) then
+                done = .true.
+            else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
+                done = .true.
+                if (len_trim(qlin) > 0) then
+                    answer = ai_query(trim(qlin), sess(active)%last_lines(15), trim(cwdv))
+                    want_insert = .false.; want_exec = .false.; keep_open = .false.
+                    call answer_view(drawer_top, answer, want_insert, want_exec, keep_open)
+                    if (want_insert .or. want_exec) then
+                        cmdline = suggested_command(answer)
+                        if (len_trim(cmdline) > 0) then
+                            rc_dummy = pty_write_text(handle(active), trim(cmdline))
+                            if (want_exec) &
+                                rc_dummy = pty_write_bytes(handle(active), (/ achar(13) /), 1)
+                            call invalidate_mirror()
+                        end if
+                    end if
+                end if
+            else if (aev%codepoint == 8 .or. aev%codepoint == 127) then
+                if (len_trim(qlin) > 0) qlin = qlin(:len_trim(qlin) - 1)
+            else if (.not. aev%ctrl .and. aev%codepoint >= 32) then
+                qlin = trim(qlin)//achar(min(aev%codepoint, 255))
+            end if
+        end do
+        call clear_drawer(drawer_top)
+        call invalidate_mirror()
     end subroutine
 
-    subroutine handle_ai(sess, h, q)
-        type(term_session), intent(inout) :: sess
-        integer(c_long_long), intent(in) :: h
-        character(len=*), intent(in) :: q
-        character(len=:), allocatable :: answer, ctx
-        character(len=512) :: cwd
-
-        call get_environment_variable('PWD', cwd)
-        if (len_trim(cwd) == 0) call get_environment_variable('CD', cwd)
-        ctx = sess%last_lines(10)
-
-        answer = ai_ask(q, ctx, trim(cwd))
-        print *
-        print *, '=== Aura AI ==='
-        print *, trim(answer)
-        print *, '==============='
-        print *
-        print *, '(/ok <command> sends it; or continue typing)'
+    subroutine clear_drawer(top_row)
+        integer, intent(in) :: top_row
+        character(len=1024) :: blank
+        integer :: r
+        blank = repeat(' ', min(con_cols, 1000))
+        do r = top_row, con_rows - 2
+            call con_write_at_f(0, r, blank(:min(con_cols, 1000)))
+        end do
     end subroutine
 
-    pure function default_shell() result(s)
-        character(len=64) :: s
-        s = '/bin/bash'
+    subroutine answer_view(top_row, ans, want_insert, want_exec, keep_open)
+        integer, intent(in) :: top_row
+        character(len=*), intent(in) :: ans
+        logical, intent(out) :: want_insert, want_exec, keep_open
+        character(len=1024) :: linebuf
+        integer :: ln, pos0, nl
+        type(key_event) :: aev
+
+        want_insert = .false.; want_exec = .false.; keep_open = .false.
+        call clear_drawer(top_row)
+        call draw_hline(top_row, con_cols)
+        ln = top_row + 1
+        pos0 = 1
+        do while (pos0 <= len_trim(ans) .and. ln < con_rows - 3)
+            nl = index(ans(pos0:), new_line('a'))
+            if (nl == 0) then
+                linebuf = ans(pos0:)
+                pos0 = len_trim(ans) + 1
+            else
+                linebuf = ans(pos0:pos0 + nl - 2)
+                pos0 = pos0 + nl
+            end if
+            call con_write_at_f(0, ln, adjustl(linebuf))
+            ln = ln + 1
+        end do
+        call con_write_at_f(0, con_rows - 3, '[Ctrl+E]insert [Ctrl+J]run [Esc]close')
+        do
+            if (.not. poll_key(-1, aev)) cycle
+            if (aev%kind /= KEV_CHAR) cycle
+            if (aev%ctrl .and. aev%codepoint == iachar('e')) then
+                want_insert = .true.; return
+            else if (aev%ctrl .and. aev%codepoint == iachar('j')) then
+                want_exec = .true.; return
+            else if (aev%codepoint == 27) then
+                return
+            end if
+        end do
+    end subroutine
+
+    function suggested_command(ans) result(cmd)
+        character(len=*), intent(in) :: ans
+        character(len=512) :: cmd
+        integer :: p, e
+        cmd = ''
+        p = index(ans, 'CMD:')
+        if (p == 0) return
+        p = p + 4
+        do while (p <= len_trim(ans) .and. ans(p:p) == ' ')
+            p = p + 1
+        end do
+        e = index(ans(p:), new_line('a'))
+        if (e == 0) then
+            cmd = ans(p:)
+        else
+            cmd = ans(p:p + e - 2)
+        end if
     end function
 
-end program aura_main
+    subroutine draw_hline(row0, ncols)
+        use iso_c_binding, only: c_int
+        integer, intent(in) :: row0, ncols
+        integer(kind=4) :: w(256)
+        integer :: j
+        integer(c_int) :: cc, rr
+        do j = 1, min(ncols, 250)
+            w(j) = int(ichar('-'), kind=4)
+        end do
+        cc = 0_c_int; rr = int(row0, c_int)
+        call con_write_at_w(cc, rr, w, int(min(ncols, 250), c_int))
+    end subroutine
+
+end program

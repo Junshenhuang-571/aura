@@ -3,6 +3,7 @@
 module aura_ansi
     use iso_fortran_env, only: i4 => int32
     implicit none
+    public :: blank_all
     private
 
     ! Parsed cell: character + colour attributes
@@ -16,6 +17,8 @@ module aura_ansi
 
     type, public :: ansi_parser
         type(term_cell), allocatable :: cells(:, :)   ! screen buffer (rows, cols)
+        type(term_cell), allocatable :: saved_cells(:, :) ! main screen when alt active
+        logical     :: alt_screen = .false.
         integer(i4) :: cur_row = 1, cur_col = 1
         integer(i4) :: rows = 24, cols = 80
         integer(i4) :: cur_fg = 7, cur_bg = 0
@@ -208,6 +211,28 @@ contains
             end select
         case ('m')
             call self%apply_sgr(buf)
+        case ('h', 'l')
+            ! private modes: ?1049/?47/?1047 alt screen, ?25 cursor visibility
+            if (len(buf) > 0 .and. buf(1:1) == '?') then
+                call get_param(buf(2:), 1, 0, p)
+                select case (p)
+                case (1049, 47, 1047)
+                    if (final == 'h' .and. .not. self%alt_screen) then
+                        if (.not. allocated(self%saved_cells)) &
+                            allocate(self%saved_cells(self%rows, self%cols))
+                        self%saved_cells = self%cells
+                        call blank_all(self%cells)
+                        self%cur_row = 1; self%cur_col = 1
+                        self%alt_screen = .true.
+                    else if (final == 'l' .and. self%alt_screen) then
+                        if (size(self%saved_cells, 1) == self%rows .and. &
+                            size(self%saved_cells, 2) == self%cols) then
+                            self%cells = self%saved_cells
+                        end if
+                        self%alt_screen = .false.
+                    end if
+                end select
+            end if
         case default
             ! unhandled CSI final — ignore (MVP scope)
             continue
