@@ -7,6 +7,8 @@
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <stdio.h>
+#include <io.h>
 
 /* --- input events ------------------------------------------------------ */
 /* ev_type: 0 = none/timeout, 1 = key char, 2 = key special, 3 = resize */
@@ -26,10 +28,24 @@ static DWORD oldInMode = 0, oldOutMode = 0;
 
 static void ensure_handles(void) {
     if (!hConIn) {
+        /* If our std handles aren't a console (detached/redirected),
+           attach to the parent's console or allocate a new one. */
+        if (GetConsoleWindow() == NULL) {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
         hConIn = GetStdHandle(STD_INPUT_HANDLE);
         hConOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        GetConsoleMode(hConIn, &oldInMode);
-        GetConsoleMode(hConOut, &oldOutMode);
+        /* Reopen std handles to the console if they were redirected/invalid */
+        if (GetConsoleMode(hConIn, &oldInMode) == 0) {
+            freopen("CONIN$", "rb", stdin);
+            hConIn = (HANDLE)_get_osfhandle(_fileno(stdin));
+            GetConsoleMode(hConIn, &oldInMode);
+        }
+        if (GetConsoleMode(hConOut, &oldOutMode) == 0) {
+            freopen("CONOUT$", "wb", stdout);
+            hConOut = (HANDLE)_get_osfhandle(_fileno(stdout));
+            GetConsoleMode(hConOut, &oldOutMode);
+        }
     }
 }
 
