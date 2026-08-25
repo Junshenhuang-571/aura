@@ -1,0 +1,19 @@
+name = "aura"
+version = "0.1.0"
+license = "MIT"
+description = "Aura - cross-platform AI-enhanced terminal emulator in modern Fortran"
+
+[build]
+auto-exe-cut = false
+link = ["user32", "kernel32"]   # harmless on Unix; needed for ConPTY bridge on Windows
+
+[dependencies]
+# json-fortran is vendored via fpm when network is available:
+# json-fortran = { git = "https://github.com/jacobwilliams/json-fortran" }
+# For MVP builds without network, a minimal built-in JSON reader is used
+# (see src/aura_config.f90) with identical config-file format.
+
+[[executable]]
+name = "aura"
+source-dir = "app"
+main = "main.f90"
