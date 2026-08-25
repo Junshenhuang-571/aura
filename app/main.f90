@@ -454,11 +454,11 @@ contains
     subroutine draw_hline(row0, ncols)
         use iso_c_binding, only: c_int
         integer, intent(in) :: row0, ncols
-        integer(kind=4) :: w(256)
+        integer(kind=2) :: w(256)
         integer :: j
         integer(c_int) :: cc, rr
         do j = 1, min(ncols, 250)
-            w(j) = int(ichar('-'), kind=4)
+            w(j) = int(ichar('-'), kind=2)
         end do
         cc = 0_c_int; rr = int(row0, c_int)
         call con_write_at_w(cc, rr, w, int(min(ncols, 250), c_int))

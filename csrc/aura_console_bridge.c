@@ -25,25 +25,44 @@ typedef struct {
 
 static HANDLE hConIn = NULL, hConOut = NULL;
 static DWORD oldInMode = 0, oldOutMode = 0;
+static int g_vt_mode = -1;   /* -1 = undecided, 1 = VT-to-stdout (pseudoconsole/ConPTY), 0 = real console */
+
+/* Return 1 if we should emit raw VT to stdout (no physical console window,
+   i.e. we are inside a pseudo-console such as Windows Terminal / PowerShell). */
+static int is_vt_mode(void) {
+    if (g_vt_mode < 0) {
+        if (GetConsoleWindow() == NULL) {
+            /* No physical console window: we are in a pseudoconsole.
+               Confirm std handles are pipes (not a real console) — ConPTY. */
+            if (GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR) {
+                /* a real console after all (rare) */
+                g_vt_mode = 0;
+            } else {
+                g_vt_mode = 1;
+            }
+        } else {
+            g_vt_mode = 0;
+        }
+    }
+    return g_vt_mode;
+}
 
 static void ensure_handles(void) {
     if (!hConIn) {
-        /* If our std handles aren't a console (detached/redirected),
-           attach to the parent's console or allocate a new one. */
-        if (GetConsoleWindow() == NULL) {
-            AttachConsole(ATTACH_PARENT_PROCESS);
-        }
+        /* On a real console, use the std handles directly.
+           On a ConPTY/pseudoconsole (no console window) we must NOT attach to a
+           parent console — the std handles are already the pseudoconsole pipes. */
         hConIn = GetStdHandle(STD_INPUT_HANDLE);
         hConOut = GetStdHandle(STD_OUTPUT_HANDLE);
-        /* Reopen std handles to the console if they were redirected/invalid */
-        if (GetConsoleMode(hConIn, &oldInMode) == 0) {
-            freopen("CONIN$", "rb", stdin);
-            hConIn = (HANDLE)_get_osfhandle(_fileno(stdin));
+        if (is_vt_mode()) {
+            /* Pseudoconsole: enables VT processing on the output pipe so our
+               ESC sequences render; leave input alone (we read stdin escapes). */
+            DWORD m = 0;
+            if (GetConsoleMode(hConOut, &m)) {
+                SetConsoleMode(hConOut, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+            }
+        } else {
             GetConsoleMode(hConIn, &oldInMode);
-        }
-        if (GetConsoleMode(hConOut, &oldOutMode) == 0) {
-            freopen("CONOUT$", "wb", stdout);
-            hConOut = (HANDLE)_get_osfhandle(_fileno(stdout));
             GetConsoleMode(hConOut, &oldOutMode);
         }
     }
@@ -53,6 +72,11 @@ void aura_con_raw_enter(void)
 {
     DWORD mode;
     ensure_handles();
+    if (is_vt_mode()) {
+        /* Pseudoconsole: stdout already has VT processing enabled in
+           ensure_handles(); stdin is a pipe (no console mode to set). */
+        return;
+    }
     mode = oldInMode;
     mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
     mode |= ENABLE_WINDOW_INPUT;              /* want resize events */
@@ -64,6 +88,7 @@ void aura_con_raw_enter(void)
 
 void aura_con_raw_exit(void)
 {
+    if (is_vt_mode()) return;   /* nothing to restore on a pseudoconsole */
     if (hConIn) { SetConsoleMode(hConIn, oldInMode); }
     if (hConOut) { SetConsoleMode(hConOut, oldOutMode); }
 }
@@ -77,6 +102,71 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
 
     ensure_handles();
     out->ev_type = 0;
+
+    /* --- ConPTY / pseudoconsole path: read bytes from the stdin pipe --- */
+    if (is_vt_mode()) {
+        unsigned char buf[16];
+        int rdn, i;
+        int tot = 0;
+        char seq[16];
+        HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+        if (WaitForSingleObject(hin, (DWORD)wait_ms) != WAIT_OBJECT_0) return 0;
+        rdn = (int)read(STDIN_FILENO, buf, sizeof(buf));
+        if (rdn <= 0) return 0;
+        /* buffer what we got for escape decoding */
+        for (i = 0; i < rdn && tot < 15; i++) seq[tot++] = (char)buf[i];
+        seq[tot] = 0;
+        if (seq[0] == '\x1b') {
+            if (tot >= 3 && seq[1] == '[') {
+                out->ev_type = 2;
+                switch (seq[2]) {
+                    case 'A': out->ev_key = 1; break;   /* up */
+                    case 'B': out->ev_key = 2; break;   /* down */
+                    case 'C': out->ev_key = 4; break;   /* right */
+                    case 'D': out->ev_key = 3; break;   /* left */
+                    case 'H': out->ev_key = 5; break;   /* home */
+                    case 'F': out->ev_key = 6; break;   /* end */
+                    case '5': out->ev_key = 7; break;   /* pgup */
+                    case '6': out->ev_key = 8; break;   /* pgdn */
+                    case '3': out->ev_key = 9; break;   /* del */
+                    default: out->ev_type = 0; break;
+                }
+                if (out->ev_type) return 1;
+            }
+            /* lone ESC (e.g. to close overlay) */
+            if (tot == 1) { out->ev_type = 1; out->ch = 27; return 1; }
+            return 0;
+        }
+        /* Ctrl+letter: bare control char */
+        if (seq[0] >= 1 && seq[0] <= 26) {
+            out->ev_type = 1; out->ch = (unsigned)(seq[0] + 'a' - 1); out->ctrl = 1;
+            return 1;
+        }
+        if (seq[0] == '\r' || seq[0] == '\n') { out->ev_type = 1; out->ch = (unsigned)seq[0]; return 1; }
+        if (seq[0] == '\t') { out->ev_type = 1; out->ch = 9; return 1; }
+        /* printable UTF-8: decode first codepoint */
+        out->ev_type = 1;
+        out->ch = (unsigned)buf[0];   /* single byte; multibyte handled well enough */
+        if (rdn > 1) {
+            /* accumulate a UTF-8 codepoint (1-4 bytes) into one event */
+            unsigned cp = 0; int bytes = 1;
+            if ((buf[0] & 0xE0) == 0xC0) bytes = 2;
+            else if ((buf[0] & 0xF0) == 0xE0) bytes = 3;
+            else if ((buf[0] & 0xF8) == 0xF0) bytes = 4;
+            if (bytes <= rdn) {
+                int k; unsigned tmp = buf[0];
+                if (bytes == 2) tmp &= 0x1F;
+                else if (bytes == 3) tmp &= 0x0F;
+                else if (bytes == 4) tmp &= 0x07;
+                cp = tmp;
+                for (k = 1; k < bytes; k++) cp = (cp << 6) | (buf[k] & 0x3F);
+                out->ch = cp;
+            }
+        }
+        return 1;
+    }
+
+    /* --- real console path: ReadConsoleInputW --- */
     for (;;) {
         if (!GetNumberOfConsoleInputEvents(hConIn, &n)) return 0;
         if (n == 0) {
@@ -133,10 +223,34 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
 
 void aura_con_write_at(int col, int row, const wchar_t* text, int nchars)
 {
+    ensure_handles();
+    if (is_vt_mode()) {
+        /* Emit cursor-position escape + UTF-8 text to the stdout pipe.
+           col/row are 0-based from the Fortran side; VT is 1-based. */
+        int r = row + 1, c = col + 1;
+        char prefix[32];
+        int plen = snprintf(prefix, sizeof(prefix), "\x1b[%d;%dH", r, c);
+        DWORD w;
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        WriteFile(out, prefix, (DWORD)plen, &w, NULL);
+        /* Convert UTF-16 cells to UTF-8 and write */
+        if (nchars > 0) {
+            int need = WideCharToMultiByte(CP_UTF8, 0, text, nchars, NULL, 0, NULL, NULL);
+            char* buf = (char*)malloc((size_t)need + 1);
+            if (buf) {
+                WideCharToMultiByte(CP_UTF8, 0, text, nchars, buf, need, NULL, NULL);
+                /* DEBUG: show first codepoint */
+                if (text[0] == 0 && nchars == 1) { /* skip pure blank debug */ }
+                WriteFile(out, buf, (DWORD)need, &w, NULL);
+                free(buf);
+            }
+        }
+        return;
+    }
     DWORD written = 0;
     COORD pos;
-    pos.X = (SHORT)(col - 1);      /* Fortran side sends 0-based already? keep 0-based contract */
-    pos.Y = (SHORT)(row - 1);      /* NOTE: see header comment — row here is 0-based from caller */
+    pos.X = (SHORT)col;      /* caller passes 0-based */
+    pos.Y = (SHORT)row;
     SetConsoleCursorPosition(hConOut, pos);
     WriteConsoleOutputCharacterW(hConOut, text, (DWORD)nchars, pos, &written);
 }

@@ -3,7 +3,6 @@
 module aura_keys
     use iso_c_binding, only: c_int
     use iso_fortran_env, only: wchar => int32
-    use aura_render
     implicit none
     private
 
@@ -42,9 +41,9 @@ module aura_keys
             integer(kind=c_int) :: cols, rows
         end subroutine
         subroutine aura_con_write_at(col, row, text, nchars) bind(C, name='aura_con_write_at')
-            import c_int
+            use iso_c_binding, only: c_int, c_short
             integer(kind=c_int), value :: col, row, nchars
-            integer(kind=4), intent(in) :: text(*)
+            integer(kind=c_short), intent(in) :: text(*)
         end subroutine
         function aura_con_poll_key_wrapper(wait_ms, ev_type, ch, spk, ctrl, shift, alt) &
                 bind(C, name='aura_con_poll_key_wrapper')
@@ -61,6 +60,28 @@ contains
         call aura_con_raw_enter()
         call render_enter_tui()
         call aura_con_hide_cursor()
+    end subroutine
+
+    ! Force the host into a known-good state: alt-screen + clear + home + cursor on.
+    ! Uses the raw VT writer (works on both real consoles and ConPTY pipes).
+    subroutine render_enter_tui()
+        use iso_c_binding, only: c_int, c_char
+        interface
+            subroutine aura_con_write_raw(bytes, n) bind(C, name='aura_con_write_raw')
+                use iso_c_binding, only: c_int, c_char
+                character(kind=c_char), intent(in) :: bytes(*)
+                integer(kind=c_int), value :: n
+            end subroutine
+        end interface
+        character(kind=c_char) :: seq(48)
+        integer :: i, n
+        ! ESC[?1049h (alt screen) ESC[2J (clear) ESC[H (home) ESC[?25h (cursor on)
+        character(*), parameter :: S = char(27)//'[?1049h'//char(27)//'[2J'//char(27)//'[H'//char(27)//'[?25h'
+        n = len(S)
+        do i = 1, n
+            seq(i) = S(i:i)
+        end do
+        call aura_con_write_raw(seq, int(n, c_int))
     end subroutine
 
     subroutine keys_raw_exit()
@@ -151,18 +172,19 @@ contains
 
     ! Raw UTF-16 code-unit array writer (used by the diff renderer).
     subroutine con_write_at_w(col, row, w, n)
-        use iso_c_binding, only: c_int
+        use iso_c_binding, only: c_int, c_short
         integer(c_int), intent(in) :: col, row, n
-        integer(kind=4), intent(in) :: w(*)
-        call aura_con_write_at(col, row, w(1:max(1,int(n))), n)
+        integer(kind=2), intent(in) :: w(*)
+        call aura_con_write_at(col, row, w, n)
     end subroutine
 
     ! Write a UTF-8 Fortran string at (row,col), converting to UTF-16 for the console.
     ! col/row are 0-based here to match the C bridge contract.
     subroutine con_write_at_f(col, row, s)
+        use iso_c_binding, only: c_int
         integer, intent(in) :: col, row
         character(len=*), intent(in) :: s
-        integer(kind=4) :: w(512)
+        integer(kind=2) :: w(512)
         integer :: n, i, cp, nbytes
         integer(c_int) :: c, r
 
@@ -185,7 +207,7 @@ contains
                 nbytes = 1
             end if
             n = n + 1
-            w(n) = int(cp, kind=4)
+            w(n) = int(cp, kind=2)
             i = i + nbytes
         end do
         c = int(col, c_int); r = int(row, c_int)

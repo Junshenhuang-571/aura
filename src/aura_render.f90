@@ -17,7 +17,7 @@ module aura_render
     type(paint_state) :: mirror
 
     public :: render_grid, render_status_line, render_full_repaint_flag
-    public :: invalidate_mirror, render_scrollback_view, render_enter_tui
+    public :: invalidate_mirror, render_scrollback_view
 
 contains
 
@@ -81,14 +81,14 @@ contains
         character(len=1), intent(in) :: chars(:)
         type(ansi_parser), intent(in) :: screen
         character(len=512) :: buf
-        integer(kind=4) :: w(512)
+        integer(kind=2) :: w(512)
         integer :: i, k
         integer(c_int) :: cc, rr
 
         k = 0
         do i = 1, min(nchars, 500)
             k = k + 1
-            w(k) = int(ichar(chars(i)), kind=4)
+            w(k) = int(ichar(chars(i)), kind=2)
         end do
         cc = int(col0, c_int); rr = int(row0, c_int)
         call con_write_at_w(cc, rr, w, int(k, c_int))
@@ -126,10 +126,10 @@ contains
         block
             use iso_c_binding, only: c_int
             integer(c_int) :: cc, rr
-            integer(kind=4) :: w(1024)
+            integer(kind=2) :: w(1024)
             integer :: j
             do j = 1, min(cols, len_trim(line))
-                w(j) = int(ichar(line(j:j)), kind=4)
+                w(j) = int(ichar(line(j:j)), kind=2)
             end do
             cc = 0_c_int
             rr = int(rows_for_status(), c_int)
@@ -166,7 +166,7 @@ contains
         use iso_c_binding, only: c_int
         integer, intent(in) :: row0, cols
         character(len=*), intent(in) :: text
-        integer(kind=4) :: w(1024)
+        integer(kind=2) :: w(1024)
         integer :: j, lim
         integer(c_int) :: cc, rr
         character(len=1024) :: padded
@@ -175,7 +175,7 @@ contains
         lim = min(cols, 1000, len(text))
         padded(1:max(1,lim)) = text(1:max(1,lim))
         do j = 1, min(cols, 1000)
-            w(j) = int(ichar(padded(j:j)), kind=4)
+            w(j) = int(ichar(padded(j:j)), kind=2)
         end do
         cc = 0_c_int
         rr = int(row0, c_int)
@@ -187,28 +187,5 @@ contains
         cells_equal = a%ch == b%ch .and. a%fg == b%fg .and. a%bg == b%bg .and. &
                       a%bold .eqv. b%bold .and. a%reverse .eqv. b%reverse
     end function
-
-    ! Force the host console into a known good state: enable VT, enter alt
-    ! screen, clear it. Guarantees a visible change on launch.
-    subroutine render_enter_tui()
-        use iso_c_binding, only: c_int, c_char
-        interface
-            subroutine aura_con_write_raw(bytes, n) bind(C, name='aura_con_write_raw')
-                use iso_c_binding, only: c_int, c_char
-                character(kind=c_char), intent(in) :: bytes(*)
-                integer(kind=c_int), value :: n
-            end subroutine
-        end interface
-        character(kind=c_char) :: seq(48)
-        integer :: i, n
-        ! ESC[?1049h  (alt screen)  ESC[2J (clear)  ESC[H (home)  ESC[?25h (cursor on)
-        character(*), parameter :: S = char(27)//'[?1049h'//char(27)//'[2J'//char(27)//'[H'//char(27)//'[?25h'
-        n = len(S)
-        do i = 1, n
-            seq(i) = S(i:i)
-        end do
-        call aura_con_write_raw(seq, int(n, c_int))
-        call invalidate_mirror()
-    end subroutine
 
 end module
