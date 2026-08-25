@@ -1,0 +1,4 @@
+boot: start
+boot: cfg loaded, shell=C:\WINDOWS\system32\cmd.exe /k
+boot: spawned sessions=1
+boot: raw mode entered, entering loop

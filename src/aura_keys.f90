@@ -3,6 +3,7 @@
 module aura_keys
     use iso_c_binding, only: c_int
     use iso_fortran_env, only: wchar => int32
+    use aura_render
     implicit none
     private
 
@@ -58,6 +59,7 @@ contains
 
     subroutine keys_raw_enter()
         call aura_con_raw_enter()
+        call render_enter_tui()
         call aura_con_hide_cursor()
     end subroutine
 

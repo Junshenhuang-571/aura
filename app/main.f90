@@ -58,16 +58,49 @@ program aura_main
     end block
 
     ! ---- boot TUI ----
-    call cfg%load()
-    call spawn_session(cfg%shell_path)
-    if (n_sess == 0) then
-        print *, 'ERROR: could not spawn shell "', trim(cfg%shell_path), '"'
-        stop 1
-    end if
-
-    call keys_raw_enter()
-    call tui_loop()
-    call keys_raw_exit()
+    block
+        integer :: u
+        open (newunit=u, file='aura_boot.log', status='replace', action='write')
+        write (u, '(A)') 'boot: start'
+        flush (u)
+        call cfg%load()
+        write (u, '(A)') 'boot: cfg loaded, shell='//trim(cfg%shell_path)
+        flush (u)
+        call spawn_session(cfg%shell_path)
+        write (u, '(A,I0)') 'boot: spawned sessions=', n_sess
+        flush (u)
+        if (n_sess == 0) then
+            block
+                use iso_c_binding, only: c_int, c_char, c_null_char
+                integer :: m
+                interface
+                    function aura_msgbox(text, title) bind(C, name='aura_msgbox')
+                        use iso_c_binding, only: c_int, c_char
+                        integer(kind=c_int) :: aura_msgbox
+                        character(kind=c_char), intent(in) :: text(*), title(*)
+                    end function
+                end interface
+                character(kind=c_char) :: mt(256), mtt(17)
+                integer :: i
+                mt = c_null_char; mtt = c_null_char
+                do i = 1, min(len_trim(cfg%shell_path), 250)
+                    mt(i) = cfg%shell_path(i:i)
+                end do
+                mtt(1:17) = (/ 'A','u','r','a',' ','e','r','r','o','r',':',' ','s','p','a','w','n' /)
+                m = aura_msgbox(mt, mtt)
+            end block
+            close (u)
+            print *, 'ERROR: could not spawn shell "', trim(cfg%shell_path), '"'
+            stop 1
+        end if
+        call keys_raw_enter()
+        write (u, '(A)') 'boot: raw mode entered, entering loop'
+        flush (u)
+        call tui_loop()
+        write (u, '(A)') 'boot: tui_loop returned'
+        call keys_raw_exit()
+        close (u)
+    end block
 
     do active = 1, n_sess
         if (sess(active)%alive) call pty_close(handle(active))

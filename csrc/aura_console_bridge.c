@@ -156,6 +156,40 @@ void aura_con_get_size(int* cols, int* rows)
 void aura_con_hide_cursor(void) { CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=FALSE; SetConsoleCursorInfo(hConOut,&ci); }
 void aura_con_show_cursor(void) { CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=TRUE; SetConsoleCursorInfo(hConOut,&ci); }
 
+/* Write raw bytes straight to the console (for VT init sequences) */
+void aura_con_write_raw(const char* bytes, int n)
+{
+    DWORD w;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out == INVALID_HANDLE_VALUE || out == NULL) return;
+    /* enable virtual-terminal processing so our ESC sequences actually render */
+    DWORD m = 0;
+    if (GetConsoleMode(out, &m)) {
+        SetConsoleMode(out, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
+    WriteConsoleA(out, bytes, n, &w, NULL);
+}
+
+int aura_msgbox(const char* text, const char* title)
+{
+    /* Force a console so the message is visible even if std handles were detached */
+    if (GetConsoleWindow() == NULL) {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+        if (GetConsoleWindow() == NULL) AllocConsole();
+    }
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (out != INVALID_HANDLE_VALUE && out != NULL) {
+        DWORD w;
+        SetConsoleTextAttribute(out, FOREGROUND_RED | FOREGROUND_INTENSITY);
+        WriteConsoleA(out, "AURA ERROR:\\r\\n", 14, &w, NULL);
+        WriteConsoleA(out, text, (DWORD)strlen(text), &w, NULL);
+        WriteConsoleA(out, "\\r\\n", 2, &w, NULL);
+    }
+    /* Also pop a GUI dialog so it is impossible to miss */
+    MessageBoxA(NULL, text, title, MB_OK | MB_ICONERROR);
+    return 0;
+}
+
 #else
 /* Unix: termios raw input; keys via read() escape decoding done Fortran-side */
 #include <termios.h>
