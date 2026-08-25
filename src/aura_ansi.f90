@@ -101,9 +101,18 @@ contains
                     call self%handle_csi(ch)
                     self%state = 0
                 end if
-            case (3)                               ! OSC terminator
-                if (ch == achar(7)) self%state = 0
-                if (ch == '\') self%state = 0      ! ESC \
+            case (3)                               ! OSC: swallow until BEL or ESC\
+                if (ch == achar(7)) then
+                    self%state = 0                 ! BEL terminator
+                else if (ch == achar(27)) then
+                    self%state = 4                 ! possible ST (ESC \)
+                end if
+            case (4)                               ! OSC-ST continuation (after ESC)
+                if (ch == '\') then
+                    self%state = 0                 ! ST = ESC \
+                else
+                    self%state = 0                 ! mismatched; bail to ground
+                end if
             end select
         end do
     end subroutine

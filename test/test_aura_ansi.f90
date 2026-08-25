@@ -48,12 +48,12 @@ program test_aura_ansi
         print *, 'FAIL: clear screen'; fails = fails + 1
     end if
 
-    ! --- OSC swallowing (title sequence must not render)
-    call p%resize(3_int32, 40_int32)
-    call p%feed(achar(27)//']0;my title'//achar(7))
+    ! --- OSC swallowing (title sequence must not render, incl. backslashes)
+    call p%resize(3_int32, 80_int32)
+    call p%feed(achar(27)//']0;WINDOWS\system32\cmd.exe - "C:\Users\junsh\projects\aura"'//achar(7))
     call p%feed('ok')
     if (p%cells(1,1)%ch /= 'o') then
-        print *, 'FAIL: OSC swallow'; fails = fails + 1
+        print *, 'FAIL: OSC swallow (backslash title)'; fails = fails + 1
     end if
 
     ! --- session scrollback strips escapes
