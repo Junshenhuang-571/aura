@@ -347,7 +347,7 @@ contains
     subroutine ai_drawer()
         character(len=1024) :: qlin
         character(len=:), allocatable :: answer, cmdline
-        integer :: drawer_top, ln
+        integer :: drawer_top, ln, qlen
         character(len=512) :: cwdv
         logical :: done, want_insert, want_exec, keep_open
         type(key_event) :: aev
@@ -359,17 +359,18 @@ contains
         call draw_hline(drawer_top, con_cols)
         call con_write_at_f(2, drawer_top, '[ Ask Aura - question, Enter; Esc cancels ]')
         qlin = ''
+        qlen = 0
         done = .false.
         do while (.not. done)
-            call con_write_at_f(3, drawer_top + 2, '> '//trim(qlin)//'_                       ')
+            call con_write_at_f(3, drawer_top + 2, '> '//qlin(:qlen)//'_                       ')
             if (.not. poll_key(-1, aev)) cycle
             if (aev%kind /= KEV_CHAR) cycle
             if (aev%codepoint == 27) then
                 done = .true.
             else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
                 done = .true.
-                if (len_trim(qlin) > 0) then
-                    answer = ai_query(trim(qlin), sess(active)%last_lines(15), trim(cwdv))
+                if (qlen > 0) then
+                    answer = ai_query(qlin(:qlen), sess(active)%last_lines(15), trim(cwdv))
                     want_insert = .false.; want_exec = .false.; keep_open = .false.
                     call answer_view(drawer_top, answer, want_insert, want_exec, keep_open)
                     if (want_insert .or. want_exec) then
@@ -383,9 +384,10 @@ contains
                     end if
                 end if
             else if (aev%codepoint == 8 .or. aev%codepoint == 127) then
-                if (len_trim(qlin) > 0) qlin = qlin(:len_trim(qlin) - 1)
-            else if (.not. aev%ctrl .and. aev%codepoint >= 32) then
-                qlin = trim(qlin)//achar(min(aev%codepoint, 255))
+                if (qlen > 0) qlen = qlen - 1
+            else if (.not. aev%ctrl .and. aev%codepoint >= 32 .and. qlen < len(qlin)) then
+                qlen = qlen + 1
+                qlin(qlen:qlen) = achar(min(aev%codepoint, 255))
             end if
         end do
         call clear_drawer(drawer_top)
