@@ -1,8 +1,9 @@
 ! aura_keys.f90 — Fortran facade over the console bridge: raw key polling,
 ! key classification (reserved vs pass-through), UTF-8 encoding of chars.
 module aura_keys
-    use iso_c_binding, only: c_int
+    use iso_c_binding, only: c_int, c_char
     use iso_fortran_env, only: wchar => int32
+    use aura_theme, only: C_BG, C_FG, sgr, sgr_reset
     implicit none
     private
 
@@ -27,6 +28,7 @@ module aura_keys
     public :: keys_raw_enter, keys_raw_exit, poll_key, key_to_vt
     public :: con_write_at_f, con_get_size_f, con_refresh_size_f
     public :: con_write_at_w, con_set_cursor_f, con_show_cursor_f, con_hide_cursor_f
+    public :: con_write_at_s, apply_theme, reset_theme
 
     interface
         subroutine aura_con_raw_enter() bind(C, name='aura_con_raw_enter')
@@ -61,6 +63,11 @@ module aura_keys
             integer(kind=c_int) :: ev_type, ch, spk, ctrl, shift, alt
             integer(kind=c_int) :: aura_con_poll_key_wrapper
         end function
+        subroutine aura_con_write_raw(bytes, n) bind(C, name='aura_con_write_raw')
+            import c_int, c_char
+            character(kind=c_char), intent(in) :: bytes(*)
+            integer(kind=c_int), value :: n
+        end subroutine
     end interface
 
 contains
@@ -274,6 +281,28 @@ contains
             seq(3) = achar(128 + iand(ishft(cp, -6), 63))
             seq(4) = achar(128 + iand(cp, 63)); n = 4
         end if
+    end subroutine
+
+    ! Colored write: SGR escape + text + reset, at (col,row) 0-based.
+    subroutine con_write_at_s(col, row, text, fg, bg, bold, rev)
+        integer, intent(in) :: col, row, fg, bg
+        logical, intent(in) :: bold, rev
+        character(len=*), intent(in) :: text
+        character(len=512) :: buf
+        buf = trim(sgr(fg, bg, bold, rev))//text//sgr_reset()
+        call con_write_at_f(col, row, buf(:min(len_trim(buf), 500)))
+    end subroutine
+
+    ! Apply Aura's global dark theme to the host console (bg + fg + clear).
+    subroutine apply_theme()
+        call aura_con_write_raw(achar(27)//'[2J'//achar(27)//'[H', 7)   ! clear + home
+        call aura_con_write_raw(trim(sgr(C_FG, C_BG, .false., .false.)), &
+                                int(len_trim(trim(sgr(C_FG, C_BG, .false., .false.))), c_int))
+    end subroutine
+
+    ! Reset the host console colors (call on exit).
+    subroutine reset_theme()
+        call aura_con_write_raw(sgr_reset(), int(len(sgr_reset()), c_int))
     end subroutine
 
 end module

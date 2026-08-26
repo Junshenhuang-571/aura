@@ -5,6 +5,7 @@ module aura_render
     use iso_c_binding, only: c_int, c_char
     use aura_ansi
     use aura_keys
+    use aura_theme
     implicit none
     private
 
@@ -183,45 +184,39 @@ contains
         slen = 3 + n
     end function
 
-    ! Status line at the bottom: tab bar showing sessions.
+    ! Status line at the bottom: styled session tab bar + AI hint.
     subroutine render_status_line(n_sessions, active_idx, titles, scroll_mode, cols)
         integer, intent(in) :: n_sessions, active_idx, cols
         character(len=*), intent(in) :: titles(:)
         logical, intent(in) :: scroll_mode
-        character(len=1024) :: line
         integer :: i, pos
         character(len=16) :: num
-
-        line = repeat(' ', max(0, min(cols, 1024)))
+        integer :: rr
+        rr = rows_for_status()
+        ! clear the whole strip first
+        call con_write_at_s(0, rr, repeat(' ', min(cols, 500)), C_BG, C_BG, .false., .false.)
         pos = 1
+        ! brand mark
+        call con_write_at_s(pos, rr, b_dot()//' Aura', C_ACCENT, C_BG, .true., .false.)
+        pos = pos + 7
         do i = 1, n_sessions
             if (i == active_idx) then
                 write (num, '(I0,A)') i, ':*'
+                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(titles(i))//' ', &
+                                    C_BG, C_ACCENT, .true., .false.)
             else
-                write (num, '(I0,A)') i, ': '
+                write (num, '(I0,A)') i, ':'
+                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(titles(i))//' ', &
+                                    C_DIM, C_BG, .false., .false.)
             end if
-            line(pos:) = trim(num)//' '//adjustl(titles(i))
-            pos = pos + len_trim(num) + 1 + len_trim(adjustl(titles(i))) + 2
-            if (pos > cols - 12) exit
+            pos = pos + 2 + len_trim(num) + 1 + len_trim(adjustl(titles(i))) + 2
+            if (pos > cols - 16) exit
         end do
         if (scroll_mode) then
-            line(max(1, cols - 11):cols) = ' [SCROLL]   '
+            call con_write_at_s(max(0, cols - 11), rr, ' [SCROLL] ', C_WARN, C_BG, .true., .false.)
         else
-            line(max(1, cols - 10):cols) = ' Ctrl+A AI'
+            call con_write_at_s(max(0, cols - 11), rr, ' Ctrl+A AI', C_ACCENT2, C_BG, .false., .false.)
         end if
-        ! draw inverse-video-ish by writing row rows (last console row, 0-based rows-1)
-        block
-            use iso_c_binding, only: c_int
-            integer(c_int) :: cc, rr
-            integer(kind=2) :: w(1024)
-            integer :: j
-            do j = 1, min(cols, len_trim(line))
-                w(j) = int(ichar(line(j:j)), kind=2)
-            end do
-            cc = 0_c_int
-            rr = int(rows_for_status(), c_int)
-            call con_write_at_w(cc, rr, w, int(min(cols, len_trim(line)), c_int))
-        end block
     end subroutine
 
     function rows_for_status() result(r)

@@ -11,6 +11,7 @@ $FC -c -std=f2018 -O2 -Wall -Jbuild -ffree-line-length-none csrc/llm_f90_src/wei
 $FC -c -std=f2018 -O2 -Wall -Jbuild -ffree-line-length-none csrc/llama2_mod.f90
 
 $FC -c -std=f2018 -O2 -Wall -Jbuild src/aura_ansi.f90
+$FC -c -std=f2018 -O2 -Wall -Jbuild src/aura_theme.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild src/aura_config.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild src/aura_session.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild src/aura_pty.f90
@@ -26,15 +27,15 @@ $CC -c -O2 csrc/aura_net.c
 # (bind(C) entry points aura_llm_available / aura_llm_generate).
 
 $FC -static -Ibuild -Jbuild -o build/aura app/main.f90 weight_module.o llama2_mod.o \
-    aura_ansi.o aura_config.o aura_session.o aura_pty.o aura_keys.o \
+    aura_ansi.o aura_theme.o aura_config.o aura_session.o aura_pty.o aura_keys.o \
     aura_render.o aura_ai.o aura_llm.o aura_gui.o \
     aura_pty_bridge.o aura_console_bridge.o aura_net.o -lws2_32 -Wl,--stack,16777216
 
 # tests
-$FC -Ibuild -Jbuild -o build/aura_test test/test_aura_ansi.f90 aura_ansi.o \
+$FC -Ibuild -Jbuild -o build/aura_test test/test_aura_ansi.f90 aura_ansi.o aura_theme.o \
     aura_config.o aura_session.o aura_pty.o aura_llm.o aura_pty_bridge.o \
     weight_module.o llama2_mod.o
-$FC -Ibuild -Jbuild -o build/e2e_final test/e2e_final.f90 aura_ansi.o aura_config.o \
+$FC -Ibuild -Jbuild -o build/e2e_final test/e2e_final.f90 aura_ansi.o aura_theme.o aura_config.o \
     aura_session.o aura_pty.o aura_llm.o aura_gui.o aura_pty_bridge.o \
     weight_module.o llama2_mod.o
 

@@ -14,6 +14,7 @@ program aura_main
     use aura_render
     use aura_ai
     use aura_config
+    use aura_theme
     implicit none
 
     integer, parameter :: MAX_SESS = 8
@@ -97,11 +98,13 @@ program aura_main
             stop 1
         end if
         call keys_raw_enter()
+        call apply_theme()
         write (u, '(A)') 'boot: raw mode entered, entering loop'
         flush (u)
         call tui_loop()
         write (u, '(A)') 'boot: tui_loop returned'
         call keys_raw_exit()
+        call reset_theme()
         close (u)
     end block
 
@@ -360,12 +363,13 @@ contains
 
         drawer_top = max(1, con_rows - 8)
         call draw_hline(drawer_top, con_cols)
-        call con_write_at_f(2, drawer_top, '[ Ask Aura - question, Enter; Esc cancels ]')
+        call con_write_at_s(2, drawer_top, b_dot()//' Aura AI', C_ACCENT, C_BG, .true., .false.)
+        call con_write_at_s(con_cols - 18, drawer_top, ' Ctrl+A to close', C_DIM, C_BG, .false., .false.)
         qlin = ''
         qlen = 0
         done = .false.
         do while (.not. done)
-            call con_write_at_f(3, drawer_top + 2, '> '//qlin(:qlen)//'_                       ')
+            call con_write_at_s(3, drawer_top + 2, b_arrow()//' '//qlin(:qlen)//'_', C_ACCENT2, C_BG, .false., .false.)
             if (.not. poll_key(-1, aev)) cycle
             if (aev%kind /= KEV_CHAR) cycle
             if (aev%codepoint == 27) then
@@ -418,6 +422,7 @@ contains
         want_insert = .false.; want_exec = .false.; keep_open = .false.
         call clear_drawer(top_row)
         call draw_hline(top_row, con_cols)
+        call con_write_at_s(2, top_row, b_dot()//' Aura AI', C_ACCENT, C_BG, .true., .false.)
         ln = top_row + 1
         pos0 = 1
         do while (pos0 <= len_trim(ans) .and. ln < con_rows - 3)
@@ -430,10 +435,16 @@ contains
                 pos0 = pos0 + nl
             end if
             call relabel_ai_line(linebuf)
-            call con_write_at_f(0, ln, adjustl(linebuf))
+            if (index(linebuf, 'Suggested command:') /= 0) then
+                call con_write_at_s(2, ln, linebuf, C_ACCENT2, C_BG, .true., .false.)
+            else if (index(linebuf, 'Why:') /= 0) then
+                call con_write_at_s(2, ln, linebuf, C_DIM, C_BG, .false., .false.)
+            else
+                call con_write_at_s(2, ln, adjustl(linebuf), C_FG, C_BG, .false., .false.)
+            end if
             ln = ln + 1
         end do
-        call con_write_at_f(0, con_rows - 3, '[Ctrl+E]insert [Ctrl+J]run [Esc]close')
+        call con_write_at_s(2, con_rows - 3, '[Ctrl+E] insert   [Ctrl+J] run   [Esc] close', C_ACCENT, C_BG, .false., .false.)
         do
             if (.not. poll_key(-1, aev)) cycle
             if (aev%kind /= KEV_CHAR) cycle
@@ -466,17 +477,21 @@ contains
         end if
     end function
 
+    ! Draw a boxed horizontal rule: top = ├─...─┤ style with a centered title.
     subroutine draw_hline(row0, ncols)
         use iso_c_binding, only: c_int
         integer, intent(in) :: row0, ncols
-        integer(kind=2) :: w(256)
-        integer :: j
         integer(c_int) :: cc, rr
-        do j = 1, min(ncols, 250)
-            w(j) = int(ichar('-'), kind=2)
+        integer(kind=2) :: w(256)
+        integer :: j, lim
+        lim = min(ncols, 250)
+        w(1) = int(z'251C', kind=2)          ! ├
+        do j = 2, lim - 1
+            w(j) = int(z'2500', kind=2)      ! ─
         end do
+        if (lim >= 2) w(lim) = int(z'2524', kind=2)   ! ┤
         cc = 0_c_int; rr = int(row0, c_int)
-        call con_write_at_w(cc, rr, w, int(min(ncols, 250), c_int))
+        call con_write_at_w(cc, rr, w, int(lim, c_int))
     end subroutine
 
     ! Rewrite the cryptic 'CMD:'/'WHY:' parse labels into clean human text for
