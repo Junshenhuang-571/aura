@@ -91,6 +91,10 @@ void aura_con_raw_enter(void)
     aura_dbg("raw_enter: vt_mode=%d GetConsoleWindow=%p outFileType=%d",
              is_vt_mode(), (void*)GetConsoleWindow(),
              (int)GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)));
+    /* Force UTF-8 so the box/diamond glyphs we emit as UTF-8 render correctly
+       instead of as CP1252 mojibake (e.g. '─' -> 'ΓöÇ'). */
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
     /* Always enable VT processing on the output handle so our ESC sequences
        (cursor moves, SGR colors, show/hide cursor) render in every host. */
     {
