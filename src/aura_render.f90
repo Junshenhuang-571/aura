@@ -207,7 +207,7 @@ contains
         if (scroll_mode) then
             line(max(1, cols - 11):cols) = ' [SCROLL]   '
         else
-            line(max(1, cols - 11):cols) = ' Ctrl+Sh+A AI'
+            line(max(1, cols - 10):cols) = ' Ctrl+A AI'
         end if
         ! draw inverse-video-ish by writing row rows (last console row, 0-based rows-1)
         block

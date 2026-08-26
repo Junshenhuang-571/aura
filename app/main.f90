@@ -219,7 +219,8 @@ contains
     logical function is_reserved(ev) result(r)
         type(key_event), intent(in) :: ev
         r = .false.
-        ! Ctrl+Shift+<letter> is reserved (canonicalized to lowercase by poll_key).
+        ! Ctrl+<letter> reserved keys (Ctrl+A/Ctrl+T/Ctrl+W). poll_key canonicalizes
+        ! a bare Ctrl+letter into lowercase+shift, so Ctrl+A matches here as ctrl+shift+'a'.
         if (ev%ctrl .and. ev%shift .and. ev%kind == KEV_CHAR) then
             if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
                 .or. ev%codepoint == iachar('w')) r = .true.
@@ -230,7 +231,7 @@ contains
         type(key_event), intent(in) :: ev
         keep_running = .true.
 
-        ! Ctrl+Shift+A -> AI drawer
+        ! Ctrl+A -> AI drawer (Ctrl+Shift+A canonicalized to the same)
         if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('a')) then
             call ai_drawer()
             return

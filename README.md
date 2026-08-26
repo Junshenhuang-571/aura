@@ -105,7 +105,7 @@ Default shell comes from `%COMSPEC%`. Verified end-to-end on Windows 10/11
 ## GTK GUI
 
 `src/aura_gui.f90` contains the gtk-fortran binding subset and module scaffold.
-Full wiring (GtkNotebook tabs, GtkTextView per tab, Ctrl+Shift+A dialog,
+Full wiring (GtkNotebook tabs, GtkTextView per tab, Ctrl+A dialog,
 idle-loop drain via `g_timeout_add`) requires linking against gtk-fortran:
 
 ```sh

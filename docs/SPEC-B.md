@@ -39,7 +39,7 @@ Rewritten:
 | Area | Decision |
 |---|---|
 | Input | Raw pass-through; child shell owns editing/history/Tab/Ctrl+C |
-| Reserved keys | Ctrl+T new session · Ctrl+W close · Ctrl+Tab cycle · Ctrl+Shift+A AI drawer · Shift+PgUp/PgDn scroll mode |
+| Reserved keys | Ctrl+T new session · Ctrl+W close · Ctrl+Tab cycle · Ctrl+A AI drawer · Shift+PgUp/PgDn scroll mode |
 | Rendering | True grid emulation, diff repaints to host console |
 | Scrollback | Aura-owned ring, default 10,000 lines (`history_lines` config); Shift+PgUp/PgDn enters scroll mode, any key exits |
 | Sessions | N live sessions; full pump (all PTYs drain continuously, only active renders); status-line tab bar at screen bottom; closing last exits |
