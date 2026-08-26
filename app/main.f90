@@ -51,6 +51,8 @@ program aura_main
             case ('--ask')
                 q = ''
                 if (command_argument_count() >= 2) call get_command_argument(2, q)
+                call cfg%load()
+                call ai_init(cfg)
                 print *, trim(ai_query(trim(q), '', '.'))
                 stop 0
             end select
@@ -64,6 +66,7 @@ program aura_main
         write (u, '(A)') 'boot: start'
         flush (u)
         call cfg%load()
+        call ai_init(cfg)
         write (u, '(A)') 'boot: cfg loaded, shell='//trim(cfg%shell_path)
         flush (u)
         call spawn_session(cfg%shell_path)

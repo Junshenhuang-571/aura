@@ -1,69 +1,126 @@
 ! aura_llm.f90 — local LLM bridge.
 !
-! MVP strategy: llm.f90 / llama2.f90-style inference is a heavy dependency that
-! requires model weights at runtime. The interface below is designed so that a
-! real backend (llm.f90 linked statically, or llama.cpp via csrc shim) can be
-! plugged in by implementing `llm_backend_generate` in C and linking it.
+! Three backends, all fully offline-capable:
+!   1. native  — pure-Fortran inference via llama2_mod (llm.f90 / llama2.c port).
+!                Zero external deps; model weights bundled in models/.
+!   2. ollama  — local OpenAI-compatible server at 127.0.0.1:11434 (no cloud).
+!   3. rule    — deterministic offline responder (aura-assist), always works.
 !
-! Without the native backend present, Aura falls back to a deterministic local
-! rule-based responder ("aura-assist") that still works fully offline: it parses
-! the terminal context and question and produces useful command suggestions for
-! common intents. This keeps the MVP self-contained with zero external deps,
-! exactly matching the project's constraint of no external runtime dependencies.
+! ai_ask_native / ai_ask_rule are the building blocks; aura_ai routes between
+! them (and ollama) per the configured backend. The native generate entry
+! points are bind(C) so they remain callable from C if a C shim is desired.
 module aura_llm
     use iso_c_binding
+    use llama2_mod
     implicit none
     private
 
-    public :: ai_ask, ai_backend_name
+    public :: ai_ask, ai_ask_native, ai_ask_rule, ai_backend_name, ai_init_native
 
-    interface
-        function c_llm_available() bind(C, name="aura_llm_available")
-            use iso_c_binding
-            integer(kind=c_int) :: c_llm_available
-        end function
-        ! returns pointer to NUL-terminated C string; caller must NOT free (static buf)
-        function c_llm_generate(prompt, ctx) bind(C, name="aura_llm_generate")
-            use iso_c_binding
-            type(c_ptr) :: c_llm_generate
-            character(kind=c_char), intent(in) :: prompt(*)
-            character(kind=c_char), intent(in) :: ctx(*)
-        end function
-    end interface
+    ! static buffer returned to C callers of aura_llm_generate
+    character(kind=c_char), save, target :: g_out(16384)
+    character(len=512) :: g_model = 'models/stories15M.bin'
+    character(len=512) :: g_tok   = 'models/tokenizer.bin'
 
 contains
+
+    ! configure which model/tokenizer the native engine loads
+    subroutine ai_init_native(model, tok)
+        character(len=*), intent(in) :: model, tok
+        g_model = model
+        g_tok = tok
+        call set_native_paths(model, tok)
+    end subroutine
 
     pure function ai_backend_name() result(name)
         character(len=:), allocatable :: name
         name = 'aura-assist (offline rules)'
     end function
 
-    function ai_ask(question, term_context, cwd) result(answer)
-        character(len=*), intent(in) :: question   ! user NL question
-        character(len=*), intent(in) :: term_context ! last N lines of output
-        character(len=*), intent(in) :: cwd
+    ! ----- native (pure-Fortran) backend -----
+    function ai_ask_native(question, ctx) result(answer)
+        character(len=*), intent(in) :: question, ctx
         character(len=:), allocatable :: answer
-        character(len=4096) :: q, ctx
-
-        q = question; ctx = term_context
-
-        ! If a native llm.f90/llama.cpp backend is linked in, prefer it.
-        if (c_llm_available() /= 0) then
-            answer = c_to_f_string(c_llm_generate(f_cstr(q), f_cstr(ctx)))
-            return
+        character(len=:), allocatable :: out
+        call generate_text(question, 200, out)
+        if (len_trim(out) == 0) then
+            answer = '[native model not loaded]'
+        else
+            answer = out
         end if
-
-        answer = rule_respond(trim(q), trim(cwd))
     end function
 
+    ! ----- rule (offline, always works) backend -----
+    function ai_ask_rule(q, cwd) result(a)
+        character(len=*), intent(in) :: q, cwd
+        character(len=:), allocatable :: a
+        a = rule_respond(trim(q), trim(cwd))
+    end function
+
+    ! ai_ask: prefer native if a model file is present, else rule.
+    ! (aura_ai may override routing for ollama / auto modes.)
+    function ai_ask(question, term_context, cwd) result(answer)
+        character(len=*), intent(in) :: question
+        character(len=*), intent(in) :: term_context
+        character(len=*), intent(in) :: cwd
+        character(len=:), allocatable :: answer
+        logical :: ex
+        inquire (file=trim(g_model), exist=ex)
+        if (ex) then
+            answer = ai_ask_native(question, term_context)
+        else
+            answer = ai_ask_rule(question, cwd)
+        end if
+    end function
+
+    ! ===== bind(C) entry points (for an optional C shim) =====
+    function c_llm_available() bind(C, name="aura_llm_available") result(r)
+        integer(kind=c_int) :: r
+        logical :: ex
+        inquire (file=trim(g_model), exist=ex)
+        r = merge(1_c_int, 0_c_int, ex)
+    end function
+
+    function c_llm_generate(prompt, ctx) bind(C, name="aura_llm_generate") result(p)
+        type(c_ptr) :: p
+        character(kind=c_char), intent(in) :: prompt(*)
+        character(kind=c_char), intent(in) :: ctx(*)
+        character(len=:), allocatable :: q, c, out
+        integer :: i, n
+        q = cptr_to_fstr(prompt)
+        c = cptr_to_fstr(ctx)
+        call generate_text(q, 200, out)
+        g_out = c_null_char
+        n = min(len_trim(out), size(g_out) - 1)
+        do i = 1, n
+            g_out(i) = out(i:i)
+        end do
+        g_out(n + 1) = c_null_char
+        p = c_loc(g_out)
+    end function
+
+    function cptr_to_fstr(cstr) result(s)
+        character(kind=c_char), intent(in) :: cstr(*)
+        character(len=:), allocatable :: s
+        integer :: i
+        i = 1
+        do while (cstr(i) /= c_null_char)
+            i = i + 1
+        end do
+        allocate (character(len=i - 1) :: s)
+        do i = 1, i - 1
+            s(i:i) = cstr(i)
+        end do
+    end function
+
+    ! ===== rule responder (deterministic, offline) =====
     function rule_respond(q, cwd) result(a)
         character(len=*), intent(in) :: q, cwd
-        character(len=2048) :: a
+        character(len=:), allocatable :: a
         a = ''
-
         select case (intent_of(q))
         case ('list_files')
-            a = 'Suggested command:'//new_line('a')//'  ls -la'//new_line('a')
+            a = 'Suggested command:'//new_line('a')//'  ls -la'
         case ('disk_space')
             a = 'Suggested command:'//new_line('a')//'  df -h'
         case ('memory')
@@ -87,8 +144,8 @@ contains
                 '"find text in files", "am I online?", "git status", "where am I".'
         case default
             a = '[offline model not loaded — using aura-assist]'//new_line('a')// &
-                'I could not map that to a command.'//new_line('a')// &
-                'Context tail: '//first_line(term_tail(q))
+                'I could not map that to a command. Common intents:'//new_line('a')// &
+                'list files, disk space, memory, processes, find text, network, git status, where am I.'
         end select
     end function
 
@@ -123,55 +180,4 @@ contains
         end if
     end function
 
-    pure function first_line(s) result(r)
-        character(len=*), intent(in) :: s
-        character(len=120) :: r
-        integer :: p
-        r = ''
-        p = index(s, new_line('a'))
-        if (p > 1) then
-            r = s(:min(p - 1, 120))
-        else
-            r = s(:min(len_trim(s), 120))
-        end if
-    end function
-
-    pure function term_tail(s) result(r)
-        character(len=*), intent(in) :: s
-        character(len=512) :: r
-        r = s(max(1, len_trim(s) - 511):len_trim(s))
-    end function
-
-    function c_to_f_string(cptr) result(s)
-        type(c_ptr), intent(in) :: cptr
-        character(len=:), allocatable :: s
-        character(kind=c_char), pointer :: cstr(:)
-        integer :: i
-        if (.not. c_associated(cptr)) then
-            s = ''
-            return
-        end if
-        call c_f_pointer(cptr, cstr, [4096])
-        i = 1
-        do while (i <= 4096 .and. cstr(i) /= c_null_char)
-            i = i + 1
-        end do
-        allocate(character(len=i - 1)::s)
-        do i = 1, i - 1
-            s(i:i) = cstr(i)
-        end do
-    end function
-
-    pure function f_cstr(s) result(cs)
-        character(len=*), intent(in) :: s
-        character(kind=c_char), allocatable :: cs(:)
-        integer :: i, n
-        n = min(len_trim(s), 4000)
-        allocate(cs(n + 1))
-        do i = 1, n
-            cs(i) = s(i:i)
-        end do
-        cs(n + 1) = c_null_char
-    end function
-
-end module
+end module aura_llm

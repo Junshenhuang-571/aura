@@ -10,8 +10,13 @@ module aura_config
     type, public :: aura_cfg
         character(len=:), allocatable :: shell_path      ! default shell
         character(len=:), allocatable :: model_path      ! local LLM weights
+        character(len=:), allocatable :: tokenizer_path  ! tokenizer for ak models
         character(len=:), allocatable :: theme           ! colour theme name
-        character(len=:), allocatable :: ai_provider     ! "local" | "openai"
+        character(len=:), allocatable :: ai_provider     ! legacy: "local" | "openai"
+        character(len=:), allocatable :: ai_backend      ! "auto"|"ollama"|"native"|"rule"
+        character(len=:), allocatable :: model_format    ! "ak" | "gguf"
+        character(len=:), allocatable :: ollama_host     ! e.g. 127.0.0.1
+        character(len=:), allocatable :: ollama_model    ! e.g. gpt-oss:20b
         integer(i4) :: history_lines = 1000
     contains
         procedure :: load, save
@@ -67,8 +72,13 @@ contains
             end if
         end if
         self%model_path = 'models/stories15M.bin'
+        self%tokenizer_path = 'models/tokenizer.bin'
         self%theme = 'dark'
         self%ai_provider = 'local'
+        self%ai_backend = 'auto'        ! ollama if reachable, else offline rules
+        self%model_format = 'ak'
+        self%ollama_host = '127.0.0.1'
+        self%ollama_model = 'gpt-oss:20b'
         self%history_lines = 1000_i4
     end subroutine
 
@@ -138,6 +148,11 @@ contains
             case ('model');   self%model_path = trim(val)
             case ('theme');   self%theme = trim(val)
             case ('provider');self%ai_provider = trim(val)
+            case ('backend');self%ai_backend = trim(val)
+            case ('tokenizer');self%tokenizer_path = trim(val)
+            case ('format'); self%model_format = trim(val)
+            case ('ollama_host');self%ollama_host = trim(val)
+            case ('ollama_model');self%ollama_model = trim(val)
             case ('history_lines')
                 read (val, *, iostat=ios) self%history_lines
                 if (ios /= 0) self%history_lines = 1000_i4
@@ -166,8 +181,13 @@ contains
         write (u, '(A)') '{'
         write (u, '(A)') '  "shell": "'//json_escape(self%shell_path)//'",'
         write (u, '(A)') '  "model": "'//json_escape(self%model_path)//'",'
+        write (u, '(A)') '  "tokenizer": "'//json_escape(self%tokenizer_path)//'",'
         write (u, '(A)') '  "theme": "'//json_escape(self%theme)//'",'
         write (u, '(A)') '  "provider": "'//json_escape(self%ai_provider)//'",'
+        write (u, '(A)') '  "backend": "'//json_escape(self%ai_backend)//'",'
+        write (u, '(A)') '  "format": "'//json_escape(self%model_format)//'",'
+        write (u, '(A)') '  "ollama_host": "'//json_escape(self%ollama_host)//'",'
+        write (u, '(A)') '  "ollama_model": "'//json_escape(self%ollama_model)//'",'
         write (u, '(A,I0,A)') '  "history_lines": ', self%history_lines, ''
         write (u, '(A)') '}'
         close (u)

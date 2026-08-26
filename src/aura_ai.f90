@@ -1,28 +1,94 @@
-! aura_ai.f90 — AI drawer brain: Ollama (OpenAI-compatible /chat/completions)
-! with automatic rule-based fallback. Builds prompt from terminal context.
+! aura_ai.f90 — AI drawer brain: routes between backends per config.
+!   backend "auto"   -> ollama if reachable, else offline rules
+!   backend "ollama" -> local Ollama HTTP, fallback to rules if unreachable
+!   backend "native" -> pure-Fortran llm.f90 engine (aura_llm)
+!   backend "rule"   -> deterministic offline responder
 module aura_ai
     use iso_c_binding, only: c_int, c_char, c_null_char
-    use aura_llm, only: ai_ask
+    use aura_llm, only: ai_ask, ai_ask_native, ai_ask_rule, ai_init_native
+    use aura_config, only: aura_cfg
     implicit none
     private
 
-    public :: ai_query, ai_provider_name
+    public :: ai_query, ai_provider_name, ai_init
 
     integer, parameter :: RESP_SIZE = 65536
-    character(len=*), parameter :: DEF_HOST = '127.0.0.1'
-    integer, parameter :: DEF_PORT = 11434
-    character(len=*), parameter :: DEF_MODEL = 'gpt-oss:20b'
+    character(len=64) :: g_host = '127.0.0.1'
+    character(len=64) :: g_model = 'gpt-oss:20b'
+    character(len=16) :: g_backend = 'auto'
+    character(len=64) :: g_provider = 'aura-assist (offline rules)'
+    type(aura_cfg), pointer :: g_cfg => null()
 
 contains
 
+    subroutine ai_init(cfg)
+        type(aura_cfg), target, intent(in) :: cfg
+        g_cfg => cfg
+        g_backend = merge(trim(cfg%ai_backend), 'auto', len_trim(cfg%ai_backend) > 0)
+        g_host = merge(trim(cfg%ollama_host), '127.0.0.1', len_trim(cfg%ollama_host) > 0)
+        g_model = merge(trim(cfg%ollama_model), 'gpt-oss:20b', len_trim(cfg%ollama_model) > 0)
+        call ai_init_native(trim(cfg%model_path), trim(cfg%tokenizer_path))
+    end subroutine
+
     pure function ai_provider_name() result(s)
         character(len=:), allocatable :: s
-        s = 'ollama:'//DEF_MODEL//' @ '//DEF_HOST
+        s = trim(g_provider)
     end function
 
     ! Ask the LLM. question = user text; ctx = last lines of terminal; cwd.
     ! Answer includes "CMD:" line with suggested command when applicable.
     function ai_query(question, ctx, cwd) result(answer)
+        character(len=*), intent(in) :: question, ctx, cwd
+        character(len=:), allocatable :: answer
+        character(len=2048) :: sysprompt, usermsg
+        character(len=8192) :: body
+        character(len=RESP_SIZE) :: raw
+        character(len=64) :: host
+        integer(c_int) :: status
+        integer :: blen, port
+
+        host = g_host
+        port = 11434
+
+        select case (g_backend)
+        case ('rule')
+            answer = ai_ask_rule(question, cwd)
+            g_provider = 'aura-assist (offline rules)'
+            return
+        case ('native')
+            answer = ai_ask_native(question, ctx)
+            g_provider = 'llm.f90 (native, pure Fortran)'
+            return
+        case ('ollama')
+            answer = ollama_ask(question, ctx, cwd, host, port, status, raw, sysprompt, usermsg, body, blen)
+            if (status == 200 .and. len_trim(answer) > 0) then
+                g_provider = 'ollama:'//trim(g_model)//' @ '//trim(host)
+            else
+                answer = ai_ask_rule(question, cwd)
+                g_provider = 'aura-assist (offline rules) [ollama unreachable]'
+            end if
+            return
+        case default   ! 'auto'
+            answer = ollama_ask(question, ctx, cwd, host, port, status, raw, sysprompt, usermsg, body, blen)
+            if (status == 200 .and. len_trim(answer) > 0) then
+                g_provider = 'ollama:'//trim(g_model)//' @ '//trim(host)
+            else
+                answer = ai_ask_rule(question, cwd)
+                g_provider = 'aura-assist (offline rules) [ollama unreachable]'
+            end if
+            return
+        end select
+    end function
+
+    function ollama_ask(question, ctx, cwd, host, port, status, raw, sysprompt, usermsg, body, blen) &
+            result(answer)
+        character(len=*), intent(in) :: question, ctx, cwd, host
+        integer, intent(in) :: port
+        integer(c_int), intent(out) :: status
+        character(len=RESP_SIZE), intent(out) :: raw
+        character(len=*), intent(inout) :: sysprompt, usermsg, body
+        integer, intent(out) :: blen
+        character(len=:), allocatable :: answer
         interface
             function aura_http_post_c(host, port, path, body, resp, resp_size) &
                     bind(C, name='aura_http_post')
@@ -33,45 +99,28 @@ contains
                 character(kind=c_char) :: resp(*)
             end function
         end interface
-
-        character(len=*), intent(in) :: question, ctx, cwd
-        character(len=:), allocatable :: answer
-        character(len=2048) :: sysprompt, usermsg
-        character(len=8192) :: body
-        character(len=RESP_SIZE) :: raw
-        character(len=64) :: host
-        integer(c_int) :: status
-        integer :: blen
-
-        host = DEF_HOST
-
         sysprompt = &
             'You are Aura, an assistant inside a terminal. Given recent terminal '// &
             'output and a question, reply EXACTLY in this format:'//new_line('a')// &
             'CMD: <one shell command that solves it, or nothing>'//new_line('a')// &
             'WHY: <one short sentence>'
-
         usermsg = 'Terminal context:'//new_line('a')//trim(ctx)// &
                   new_line('a')//'CWD: '//trim(cwd)// &
                   new_line('a')//'Question: '//trim(question)
-
         body = ''
-        body = '{"model":"'//DEF_MODEL//'","messages":['// &
+        body = '{"model":"'//trim(g_model)//'","messages":['// &
                '{"role":"system","content":'//trim(json_escape_str(sysprompt))//'},'// &
                '{"role":"user","content":'//trim(json_escape_str(usermsg))//'}],'// &
                '"stream":false}'
         blen = len_trim(body)
-
         raw = ''
-        status = aura_http_post_c(f_cstr(host), int(DEF_PORT, c_int), &
+        status = aura_http_post_c(f_cstr(host), int(port, c_int), &
                                   f_cstr('/v1/chat/completions'), &
                                   f_cstr_len(body, blen), raw, int(RESP_SIZE, c_int))
-
         if (status == 200) then
             answer = extract_content(raw)
-            if (len_trim(answer) == 0) answer = fallback(question, cwd)
         else
-            answer = fallback(question, cwd)
+            answer = ''
         end if
     end function
 

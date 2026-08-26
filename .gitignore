@@ -9,3 +9,12 @@ build/*.bin
 aura_debug.log
 aura_boot.log
 aura_debug.log
+
+# bundled model weights (large, fetched separately)
+models/
+# stray build artifacts at repo root
+*.o
+*.mod
+
+# rbitr/llm.f90 clone (vendored reference source)
+csrc/llm_f90_src/
