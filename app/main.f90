@@ -17,7 +17,7 @@ program aura_main
     implicit none
 
     integer, parameter :: MAX_SESS = 8
-    integer(i4), parameter :: GRID_ROWS = 30, GRID_COLS = 100
+    integer(i4) :: GRID_ROWS = 30, GRID_COLS = 100   ! mutable; set from real terminal size at boot
 
     type(term_session), allocatable :: sess(:)      ! heap: big arrays inside
     integer(c_long_long), allocatable :: handle(:)
@@ -175,6 +175,16 @@ contains
             if (poll_key(30, ev)) then
                 select case (ev%kind)
                 case (KEV_RESIZE)
+                    ! Re-query real terminal size (ConPTY-aware) and resize grid + PTY.
+                    if (con_refresh_size_f() /= 0) then
+                        call con_get_size_f(con_cols, con_rows)
+                        if (con_cols >= 20 .and. con_rows >= 6) then
+                            GRID_COLS = con_cols
+                            GRID_ROWS = con_rows
+                            call sess(active)%screen%resize(int(GRID_ROWS, i4), int(GRID_COLS, i4))
+                            call pty_resize(handle(active), GRID_COLS, GRID_ROWS)
+                        end if
+                    end if
                     call invalidate_mirror()
                 case (KEV_CHAR)
                     if (is_reserved(ev)) then
@@ -273,7 +283,13 @@ contains
 
     subroutine spawn_session(shellcmd)
         character(len=*), intent(in) :: shellcmd
+        integer :: qc, qr
         if (n_sess >= MAX_SESS) return
+        call con_get_size_f(qc, qr)         ! real terminal size (ConPTY-aware)
+        if (qc < 20) qc = 80
+        if (qr < 6)  qr = 24
+        GRID_COLS = qc
+        GRID_ROWS = qr
         call init_blank(sess(n_sess + 1))
         if (pty_spawn(shellcmd, GRID_COLS, GRID_ROWS, handle(n_sess + 1)) /= 0) return
         n_sess = n_sess + 1

@@ -7,3 +7,5 @@ build/aura_gui.exe
 build/*_test.exe
 build/*.bin
 aura_debug.log
+aura_boot.log
+aura_debug.log

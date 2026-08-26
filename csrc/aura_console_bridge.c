@@ -11,6 +11,10 @@
 #include <io.h>
 #include <stdarg.h>
 
+/* forward declarations (defined later in this file) */
+static int vt_query_size(void);
+static int vt_check_resize(void);
+
 /* --- input events ------------------------------------------------------ */
 /* ev_type: 0 = none/timeout, 1 = key char, 2 = key special, 3 = resize */
 /* special key ids (ev_key): 1=Up 2=Down 3=Left 4=Right 5=Home 6=End
@@ -27,6 +31,7 @@ typedef struct {
 static HANDLE hConIn = NULL, hConOut = NULL;
 static DWORD oldInMode = 0, oldOutMode = 0;
 static int g_vt_mode = -1;   /* -1 = undecided, 1 = VT-to-stdout (pseudoconsole/ConPTY), 0 = real console */
+static int g_sz_cols = 0, g_sz_rows = 0, g_sz_ok = 0;  /* cached terminal size */
 
 /* Return 1 if we should emit raw VT to stdout. We are in a pseudo-console
    (Windows Terminal / PowerShell / ConPTY) when our stdout is a PIPE — that is
@@ -122,6 +127,11 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
 
     /* --- ConPTY / pseudoconsole path: read bytes from the stdin pipe --- */
     if (is_vt_mode()) {
+        /* Resize events arrive on the console input buffer, not the pipe. */
+        if (vt_check_resize()) {
+            out->ev_type = 3;   /* KEV_RESIZE */
+            return 1;
+        }
         unsigned char buf[16];
         int rdn, i;
         int tot = 0;
@@ -273,12 +283,119 @@ void aura_con_get_size(int* cols, int* rows)
 {
     CONSOLE_SCREEN_BUFFER_INFO info;
     ensure_handles();
+
+    if (is_vt_mode()) {
+        /* On a ConPTY the stdout handle is a PIPE, so GetConsoleScreenBufferInfo
+           fails. Query the real terminal size via the VT size report (ESC[18t),
+           which Windows Terminal / ConPTY answer with ESC[8;ROWS;COLS*t. */
+        if (!g_sz_ok) vt_query_size();
+        if (g_sz_ok) {
+            *cols = g_sz_cols;
+            *rows = g_sz_rows;
+            return;
+        }
+        /* Fallback defaults if the report never arrived. */
+        *cols = 80; *rows = 25;
+        return;
+    }
+
     if (GetConsoleScreenBufferInfo(hConOut, &info)) {
         *cols = (int)(info.srWindow.Right - info.srWindow.Left + 1);
         *rows = (int)(info.srWindow.Bottom - info.srWindow.Top + 1);
     } else {
         *cols = 80; *rows = 25;
     }
+}
+
+/* Query terminal size via VT report; cache result in g_sz_*. Returns 1 on success.
+   Only used in VT/ConPTY mode where GetConsoleScreenBufferInfo is unavailable. */
+static int vt_query_size(void)
+{
+    HANDLE hin = GetStdHandle(STD_INPUT_HANDLE);
+    HANDLE hout = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD w = 0;
+    int i, tot = 0;
+    char buf[64];
+    unsigned char rb[64];
+    int rows = 0, cols = 0, stage = 0, val = 0;
+
+    /* Request window size in characters: ESC[18t -> response ESC[8;h;w t */
+    const char* req = "\x1b[18t";
+    WriteFile(hout, req, (DWORD)strlen(req), &w, NULL);
+
+    /* Read the synchronous report echoed back on stdin (pipe).
+       Bound each read with a short timeout so we never hang at boot if the
+       terminal does not answer the size query. */
+    for (i = 0; i < 24; i++) {
+        if (WaitForSingleObject(hin, 150) != WAIT_OBJECT_0) break;   /* no data -> give up */
+        if (!ReadFile(hin, rb, 1, &w, NULL) || w == 0) break;
+        buf[tot < 63 ? tot : 63] = (char)rb[0];
+        if (tot < 63) tot++;
+        /* Parse ESC [ 8 ; rows ; cols t  (response to ESC[18t) */
+        if (stage == 0 && rb[0] == 0x1b) stage = 1;
+        else if (stage == 1 && rb[0] == '[') stage = 2;
+        else if (stage == 2 && rb[0] == '8') { stage = 3; }       /* expect ';' then rows */
+        else if (stage == 3 && rb[0] == ';') { stage = 4; val = 0; } /* start of rows */
+        else if (stage == 4) {
+            if (rb[0] >= '0' && rb[0] <= '9') val = val * 10 + (rb[0] - '0');
+            else if (rb[0] == ';') { rows = val; stage = 5; val = 0; } /* start of cols */
+            else { stage = 0; }
+        }
+        else if (stage == 5) {
+            if (rb[0] >= '0' && rb[0] <= '9') val = val * 10 + (rb[0] - '0');
+            else if (rb[0] == 't') { cols = val; stage = 6; break; }
+            else { stage = 0; }
+        }
+        if (stage == 6) break;
+    }
+    buf[tot] = 0;
+    if (rows > 0 && cols > 0) {
+        g_sz_rows = rows; g_sz_cols = cols; g_sz_ok = 1;
+        aura_dbg("vt_query_size: rows=%d cols=%d", rows, cols);
+        return 1;
+    }
+    return 0;
+}
+
+/* Re-read the real terminal size (call after a resize). Returns 1 if changed. */
+int aura_con_refresh_size(void)
+{
+    int oldc = g_sz_cols, oldr = g_sz_rows, ok = g_sz_ok;
+    g_sz_ok = 0;
+    if (is_vt_mode()) {
+        if (!vt_query_size()) { g_sz_ok = ok; g_sz_cols = oldc; g_sz_rows = oldr; return 0; }
+        return (g_sz_cols != oldc || g_sz_rows != oldr) ? 1 : 0;
+    }
+    int c = 0, r = 0;
+    aura_con_get_size(&c, &r);
+    return (c != oldc || r != oldr) ? 1 : 0;
+}
+
+/* Best-effort ConPTY resize detection: peek the console input buffer (CONIN$)
+   for a WINDOW_BUFFER_SIZE_EVENT. In a ConPTY the stdin is a pipe (so the byte
+   reader never sees this event) but the pseudoconsole's input buffer still
+   receives it. Returns 1 if a resize was observed (event consumed). Safe: if
+   CONIN$ is unavailable we simply report no resize. */
+static int vt_check_resize(void)
+{
+    static HANDLE hConIn2 = NULL;
+    static int tried = 0;
+    INPUT_RECORD rec;
+    DWORD n = 0;
+    if (!tried) {
+        tried = 1;
+        hConIn2 = CreateFileA("CONIN$", GENERIC_READ,
+                              FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_EXISTING, 0, NULL);
+        if (hConIn2 == INVALID_HANDLE_VALUE) hConIn2 = NULL;
+    }
+    if (!hConIn2) return 0;
+    if (!PeekConsoleInputW(hConIn2, &rec, 1, &n) || n == 0) return 0;
+    if (rec.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+        ReadConsoleInputW(hConIn2, &rec, 1, &n);   /* consume */
+        return 1;
+    }
+    return 0;
 }
 
 void aura_con_hide_cursor(void) {

@@ -25,7 +25,8 @@ module aura_keys
     integer, parameter, public :: KEY_DEL=9,  KEY_INS=10
 
     public :: keys_raw_enter, keys_raw_exit, poll_key, key_to_vt
-    public :: con_write_at_f, con_get_size_f, con_write_at_w, con_set_cursor_f, con_show_cursor_f, con_hide_cursor_f
+    public :: con_write_at_f, con_get_size_f, con_refresh_size_f
+    public :: con_write_at_w, con_set_cursor_f, con_show_cursor_f, con_hide_cursor_f
 
     interface
         subroutine aura_con_raw_enter() bind(C, name='aura_con_raw_enter')
@@ -44,6 +45,10 @@ module aura_keys
             import c_int
             integer(kind=c_int) :: cols, rows
         end subroutine
+        function aura_con_refresh_size() bind(C, name='aura_con_refresh_size')
+            import c_int
+            integer(kind=c_int) :: aura_con_refresh_size
+        end function
         subroutine aura_con_write_at(col, row, text, nchars) bind(C, name='aura_con_write_at')
             use iso_c_binding, only: c_int, c_short
             integer(kind=c_int), value :: col, row, nchars
@@ -99,6 +104,12 @@ contains
         call aura_con_get_size(c, r)
         cols = int(c); rows = int(r)
     end subroutine
+
+    integer function con_refresh_size_f()
+        integer(c_int) :: r
+        r = aura_con_refresh_size()
+        con_refresh_size_f = int(r)
+    end function
 
     subroutine con_set_cursor_f(col, row)
         integer, intent(in) :: col, row
