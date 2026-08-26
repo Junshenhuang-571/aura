@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <io.h>
+#include <stdarg.h>
 
 /* --- input events ------------------------------------------------------ */
 /* ev_type: 0 = none/timeout, 1 = key char, 2 = key special, 3 = resize */
@@ -27,24 +28,34 @@ static HANDLE hConIn = NULL, hConOut = NULL;
 static DWORD oldInMode = 0, oldOutMode = 0;
 static int g_vt_mode = -1;   /* -1 = undecided, 1 = VT-to-stdout (pseudoconsole/ConPTY), 0 = real console */
 
-/* Return 1 if we should emit raw VT to stdout (no physical console window,
-   i.e. we are inside a pseudo-console such as Windows Terminal / PowerShell). */
+/* Return 1 if we should emit raw VT to stdout. We are in a pseudo-console
+   (Windows Terminal / PowerShell / ConPTY) when our stdout is a PIPE — that is
+   the reliable signal. Fall back to the legacy real-console path only when
+   stdout is a character device AND there is a real console window. */
 static int is_vt_mode(void) {
     if (g_vt_mode < 0) {
-        if (GetConsoleWindow() == NULL) {
-            /* No physical console window: we are in a pseudoconsole.
-               Confirm std handles are pipes (not a real console) — ConPTY. */
-            if (GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) == FILE_TYPE_CHAR) {
-                /* a real console after all (rare) */
-                g_vt_mode = 0;
-            } else {
-                g_vt_mode = 1;
-            }
+        DWORD ft = GetFileType(GetStdHandle(STD_OUTPUT_HANDLE));
+        if (ft == FILE_TYPE_PIPE) {
+            g_vt_mode = 1;            /* ConPTY: stdout is a pipe -> VT to stdout */
+        } else if (GetConsoleWindow() == NULL) {
+            g_vt_mode = (ft == FILE_TYPE_CHAR) ? 0 : 1;
         } else {
-            g_vt_mode = 0;
+            g_vt_mode = 0;            /* classic attached console */
         }
     }
     return g_vt_mode;
+}
+
+/* Optional debug logger, enabled when env AURA_DEBUG=1 is set.
+   Writes key facts to aura_debug.log so we can diagnose the real terminal. */
+static void aura_dbg(const char* fmt, ...) {
+    static int enabled = -1;
+    if (enabled < 0) enabled = (getenv("AURA_DEBUG") != NULL) ? 1 : 0;
+    if (!enabled) return;
+    FILE* f = fopen("C:/Users/junsh/projects/aura/aura_debug.log", "a");
+    if (!f) return;
+    va_list ap; va_start(ap, fmt); vfprintf(f, fmt, ap); va_end(ap);
+    fputc('\n', f); fclose(f);
 }
 
 static void ensure_handles(void) {
@@ -72,18 +83,24 @@ void aura_con_raw_enter(void)
 {
     DWORD mode;
     ensure_handles();
+    aura_dbg("raw_enter: vt_mode=%d GetConsoleWindow=%p outFileType=%d",
+             is_vt_mode(), (void*)GetConsoleWindow(),
+             (int)GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)));
+    /* Always enable VT processing on the output handle so our ESC sequences
+       (cursor moves, SGR colors, show/hide cursor) render in every host. */
+    {
+        DWORD m = 0;
+        if (GetConsoleMode(hConOut, &m))
+            SetConsoleMode(hConOut, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
     if (is_vt_mode()) {
-        /* Pseudoconsole: stdout already has VT processing enabled in
-           ensure_handles(); stdin is a pipe (no console mode to set). */
+        /* Pseudoconsole: stdin is a pipe (no console mode to set). */
         return;
     }
     mode = oldInMode;
     mode &= ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT | ENABLE_PROCESSED_INPUT);
     mode |= ENABLE_WINDOW_INPUT;              /* want resize events */
     SetConsoleMode(hConIn, mode);
-    /* enable VT output on the legacy path too (harmless under WT) */
-    mode = oldOutMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-    SetConsoleMode(hConOut, mode);
 }
 
 void aura_con_raw_exit(void)
@@ -131,19 +148,24 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
                     case '3': out->ev_key = 9; break;   /* del */
                     default: out->ev_type = 0; break;
                 }
-                if (out->ev_type) return 1;
+                if (out->ev_type) {
+                    aura_dbg("key: vt path type=%d ch=%u key=%d ctrl=%d shift=%d seq='%s'",
+                             out->ev_type, out->ch, out->ev_key, out->ctrl, out->shift, seq);
+                    return 1;
+                }
             }
             /* lone ESC (e.g. to close overlay) */
-            if (tot == 1) { out->ev_type = 1; out->ch = 27; return 1; }
+            if (tot == 1) { out->ev_type = 1; out->ch = 27; aura_dbg("key: vt lone-ESC"); return 1; }
             return 0;
         }
         /* Ctrl+letter: bare control char */
         if (seq[0] >= 1 && seq[0] <= 26) {
             out->ev_type = 1; out->ch = (unsigned)(seq[0] + 'a' - 1); out->ctrl = 1;
+            aura_dbg("key: vt ctrl-letter ch=%u (%s)", out->ch, seq);
             return 1;
         }
-        if (seq[0] == '\r' || seq[0] == '\n') { out->ev_type = 1; out->ch = (unsigned)seq[0]; return 1; }
-        if (seq[0] == '\t') { out->ev_type = 1; out->ch = 9; return 1; }
+        if (seq[0] == '\r' || seq[0] == '\n') { out->ev_type = 1; out->ch = (unsigned)seq[0]; aura_dbg("key: vt CR/LF"); return 1; }
+        if (seq[0] == '\t') { out->ev_type = 1; out->ch = 9; aura_dbg("key: vt TAB"); return 1; }
         /* printable UTF-8: decode first codepoint */
         out->ev_type = 1;
         out->ch = (unsigned)buf[0];   /* single byte; multibyte handled well enough */
@@ -193,6 +215,8 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
             if (uch != 0) {
                 out->ev_type = 1;
                 out->ch = uch;
+                aura_dbg("key: console path type=1 ch=%u (%c) ctrl=%d shift=%d alt=%d vk=%u",
+                         uch, (uch>=32&&uch<127)?(char)uch:'.', is_ctrl, is_shift, is_alt, (unsigned)vk);
                 return 1;
             }
             /* no unicode char: map special keys */
@@ -224,35 +248,25 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
 void aura_con_write_at(int col, int row, const wchar_t* text, int nchars)
 {
     ensure_handles();
-    if (is_vt_mode()) {
-        /* Emit cursor-position escape + UTF-8 text to the stdout pipe.
-           col/row are 0-based from the Fortran side; VT is 1-based. */
-        int r = row + 1, c = col + 1;
-        char prefix[32];
-        int plen = snprintf(prefix, sizeof(prefix), "\x1b[%d;%dH", r, c);
-        DWORD w;
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        WriteFile(out, prefix, (DWORD)plen, &w, NULL);
-        /* Convert UTF-16 cells to UTF-8 and write */
-        if (nchars > 0) {
-            int need = WideCharToMultiByte(CP_UTF8, 0, text, nchars, NULL, 0, NULL, NULL);
-            char* buf = (char*)malloc((size_t)need + 1);
-            if (buf) {
-                WideCharToMultiByte(CP_UTF8, 0, text, nchars, buf, need, NULL, NULL);
-                /* DEBUG: show first codepoint */
-                if (text[0] == 0 && nchars == 1) { /* skip pure blank debug */ }
-                WriteFile(out, buf, (DWORD)need, &w, NULL);
-                free(buf);
-            }
+    /* Always emit cursor-position escape + UTF-8 text to stdout.
+       On a ConPTY this is the only correct path; on a real console with VT
+       processing enabled (see aura_con_raw_enter) it also renders correctly
+       and lets us carry SGR color escapes produced by the Fortran renderer. */
+    int r = row + 1, c = col + 1;
+    char prefix[32];
+    int plen = snprintf(prefix, sizeof(prefix), "\x1b[%d;%dH", r, c);
+    DWORD w;
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    WriteFile(out, prefix, (DWORD)plen, &w, NULL);
+    if (nchars > 0) {
+        int need = WideCharToMultiByte(CP_UTF8, 0, text, nchars, NULL, 0, NULL, NULL);
+        char* buf = (char*)malloc((size_t)need + 1);
+        if (buf) {
+            WideCharToMultiByte(CP_UTF8, 0, text, nchars, buf, need, NULL, NULL);
+            WriteFile(out, buf, (DWORD)need, &w, NULL);
+            free(buf);
         }
-        return;
     }
-    DWORD written = 0;
-    COORD pos;
-    pos.X = (SHORT)col;      /* caller passes 0-based */
-    pos.Y = (SHORT)row;
-    SetConsoleCursorPosition(hConOut, pos);
-    WriteConsoleOutputCharacterW(hConOut, text, (DWORD)nchars, pos, &written);
 }
 
 void aura_con_get_size(int* cols, int* rows)
@@ -269,40 +283,25 @@ void aura_con_get_size(int* cols, int* rows)
 
 void aura_con_hide_cursor(void) {
     ensure_handles();
-    if (is_vt_mode()) {
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD w; const char* s = "\x1b[?25l";
-        WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
-        return;
-    }
-    CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=FALSE; SetConsoleCursorInfo(hConOut,&ci);
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD w; const char* s = "\x1b[?25l";
+    WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
 }
 void aura_con_show_cursor(void) {
     ensure_handles();
-    if (is_vt_mode()) {
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        DWORD w; const char* s = "\x1b[?25h";
-        WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
-        return;
-    }
-    CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=TRUE; SetConsoleCursorInfo(hConOut,&ci);
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD w; const char* s = "\x1b[?25h";
+    WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
 }
 
-/* Move the host cursor (0-based col/row) in either mode. */
+/* Move the host cursor (0-based col/row). */
 void aura_con_set_cursor(int col, int row)
 {
     ensure_handles();
-    if (is_vt_mode()) {
-        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
-        char seq[32]; DWORD w;
-        int plen = snprintf(seq, sizeof(seq), "\x1b[%d;%dH", row + 1, col + 1);
-        WriteFile(out, seq, (DWORD)plen, &w, NULL);
-        return;
-    }
-    COORD pos;
-    pos.X = (SHORT)col;
-    pos.Y = (SHORT)row;
-    SetConsoleCursorPosition(hConOut, pos);
+    HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+    char seq[32]; DWORD w;
+    int plen = snprintf(seq, sizeof(seq), "\x1b[%d;%dH", row + 1, col + 1);
+    WriteFile(out, seq, (DWORD)plen, &w, NULL);
 }
 
 /* Write raw bytes straight to the console (for VT init sequences) */
