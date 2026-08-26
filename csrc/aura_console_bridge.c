@@ -267,8 +267,43 @@ void aura_con_get_size(int* cols, int* rows)
     }
 }
 
-void aura_con_hide_cursor(void) { CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=FALSE; SetConsoleCursorInfo(hConOut,&ci); }
-void aura_con_show_cursor(void) { CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=TRUE; SetConsoleCursorInfo(hConOut,&ci); }
+void aura_con_hide_cursor(void) {
+    ensure_handles();
+    if (is_vt_mode()) {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD w; const char* s = "\x1b[?25l";
+        WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
+        return;
+    }
+    CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=FALSE; SetConsoleCursorInfo(hConOut,&ci);
+}
+void aura_con_show_cursor(void) {
+    ensure_handles();
+    if (is_vt_mode()) {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD w; const char* s = "\x1b[?25h";
+        WriteFile(out, s, (DWORD)strlen(s), &w, NULL);
+        return;
+    }
+    CONSOLE_CURSOR_INFO ci; ci.dwSize=25; ci.bVisible=TRUE; SetConsoleCursorInfo(hConOut,&ci);
+}
+
+/* Move the host cursor (0-based col/row) in either mode. */
+void aura_con_set_cursor(int col, int row)
+{
+    ensure_handles();
+    if (is_vt_mode()) {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        char seq[32]; DWORD w;
+        int plen = snprintf(seq, sizeof(seq), "\x1b[%d;%dH", row + 1, col + 1);
+        WriteFile(out, seq, (DWORD)plen, &w, NULL);
+        return;
+    }
+    COORD pos;
+    pos.X = (SHORT)col;
+    pos.Y = (SHORT)row;
+    SetConsoleCursorPosition(hConOut, pos);
+}
 
 /* Write raw bytes straight to the console (for VT init sequences) */
 void aura_con_write_raw(const char* bytes, int n)
@@ -276,13 +311,17 @@ void aura_con_write_raw(const char* bytes, int n)
     DWORD w;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
     if (out == INVALID_HANDLE_VALUE || out == NULL) return;
-    /* enable virtual-terminal processing so our ESC sequences actually render */
-    DWORD m = 0;
-    if (GetConsoleMode(out, &m)) {
-        SetConsoleMode(out, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    /* In a real console, enable VT so our ESC sequences render; in a ConPTY
+       (pipe) this is a no-op and WriteFile delivers bytes to the host. */
+    if (!is_vt_mode()) {
+        DWORD m = 0;
+        if (GetConsoleMode(out, &m)) {
+            SetConsoleMode(out, m | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+        }
     }
-    WriteConsoleA(out, bytes, n, &w, NULL);
+    WriteFile(out, bytes, (DWORD)n, &w, NULL);
 }
+
 
 int aura_msgbox(const char* text, const char* title)
 {
@@ -393,3 +432,4 @@ int aura_con_poll_key_wrapper(int wait_ms, int* ev_type, int* ch, int* spk,
     *ctrl = ev.ctrl; *shift = ev.shift; *alt = ev.alt;
     return got;
 }
+

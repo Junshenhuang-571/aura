@@ -209,17 +209,10 @@ contains
     logical function is_reserved(ev) result(r)
         type(key_event), intent(in) :: ev
         r = .false.
-        if (ev%ctrl .and. ev%codepoint >= iachar('a') .and. ev%codepoint <= iachar('z')) then
-            select case (ev%codepoint)
-            case (iachar('t'), iachar('w'), iachar('a'))
-                r = ev%shift .eqv. (ev%codepoint == iachar('A'))   ! placeholder, refined below
-                r = (ev%codepoint /= iachar('a')) .or. ev%shift
-                ! Ctrl+T new, Ctrl+W close; Ctrl+Shift+A handled here too
-                if (ev%codepoint == iachar('t') .or. ev%codepoint == iachar('w')) r = .true.
-                if (ev%codepoint == iachar('a')) r = ev%shift
-            end select
-        else if (ev%ctrl .and. ev%codepoint == 9) then
-            r = .true.      ! Ctrl+I (Tab with ctrl on some consoles) unused
+        ! Ctrl+Shift+<letter> is reserved (canonicalized to lowercase by poll_key).
+        if (ev%ctrl .and. ev%shift .and. ev%kind == KEV_CHAR) then
+            if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
+                .or. ev%codepoint == iachar('w')) r = .true.
         end if
     end function
 
@@ -228,12 +221,11 @@ contains
         keep_running = .true.
 
         ! Ctrl+Shift+A -> AI drawer
-        if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('A')) then
+        if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('a')) then
             call ai_drawer()
             return
         end if
-        ! Ctrl+Tab -> cycle session (Tab char code 9 arrives when Ctrl+Tab pressed
-        ! in Windows console as ctrl+char 9? we also accept plain detection below)
+        ! Ctrl+Tab -> cycle session
         if (ev%ctrl .and. ev%codepoint == 9) then
             active = mod(active, n_sess) + 1
             scroll_mode = .false.

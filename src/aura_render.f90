@@ -2,6 +2,7 @@
 ! host console with minimal updates; scroll-mode painter; status-line tab bar.
 module aura_render
     use iso_fortran_env, only: i4 => int32
+    use iso_c_binding, only: c_int, c_char
     use aura_ansi
     use aura_keys
     implicit none
@@ -73,28 +74,114 @@ contains
             end do
         end do
         mirror%last = screen%cells
+        ! Position the host cursor where the PTY thinks it is, and show it.
+        call con_set_cursor_f(screen%cur_col - 1, screen%cur_row - 1)
+        call con_show_cursor_f()
     end subroutine
 
     subroutine write_run(row0, col0, chars, nchars, screen, srow, scol)
-        use iso_c_binding, only: c_int
+        use iso_c_binding, only: c_int, c_char
         integer, intent(in) :: row0, col0, nchars, srow, scol
         character(len=1), intent(in) :: chars(:)
         type(ansi_parser), intent(in) :: screen
+        character(kind=c_char) :: sgr(32)
         character(len=512) :: buf
         integer(kind=2) :: w(512)
-        integer :: i, k
+        integer :: i, k, slen, seg_start, cidx
+        integer :: prev_fg, prev_bg
+        logical :: prev_bold, prev_rev
         integer(c_int) :: cc, rr
+        type(term_cell) :: cur
+        interface
+            subroutine aura_con_write_raw(bytes, n) bind(C, name='aura_con_write_raw')
+                use iso_c_binding, only: c_int, c_char
+                character(kind=c_char), intent(in) :: bytes(*)
+                integer(kind=c_int), value :: n
+            end subroutine
+        end interface
 
+        ! Walk the run and emit an SGR escape whenever the cell attributes
+        ! change (color/bold/reverse), then write the text in segments.
+        ! This is required because a single "dirty run" may span multiple
+        ! colors (e.g. "normal REDTEXT done").
+        prev_fg = -1; prev_bg = -1; prev_bold = .false.; prev_rev = .false.
+        seg_start = 1
         k = 0
         do i = 1, min(nchars, 500)
+            cidx = scol + i - 1
+            cur = screen%cells(srow, cidx)
+            if (i > 1) then
+                if (cur%fg /= prev_fg .or. cur%bg /= prev_bg &
+                    .or. cur%bold .neqv. prev_bold .or. cur%reverse .neqv. prev_rev) then
+                        ! flush the segment collected so far
+                    if (k > 0) then
+                        cc = int(col0 + (seg_start - 1), c_int)
+                        rr = int(row0, c_int)
+                        call con_write_at_w(cc, rr, w, int(k, c_int))
+                        k = 0
+                    end if
+                    seg_start = i
+                end if
+            end if
+            ! emit SGR if this cell's attributes differ from the previous
+            if (cur%fg /= prev_fg .or. cur%bg /= prev_bg &
+                .or. cur%bold .neqv. prev_bold .or. cur%reverse .neqv. prev_rev) then
+                slen = build_sgr(cur, sgr)
+                if (slen > 0) call aura_con_write_raw(sgr, int(slen, c_int))
+                prev_fg = cur%fg; prev_bg = cur%bg
+                prev_bold = cur%bold; prev_rev = cur%reverse
+            end if
             k = k + 1
             w(k) = int(ichar(chars(i)), kind=2)
         end do
-        cc = int(col0, c_int); rr = int(row0, c_int)
-        call con_write_at_w(cc, rr, w, int(k, c_int))
+        if (k > 0) then
+            cc = int(col0 + (seg_start - 1), c_int)
+            rr = int(row0, c_int)
+            call con_write_at_w(cc, rr, w, int(k, c_int))
+        end if
         ! update mirror for this run incl attributes
         mirror%last(srow, scol:scol + nchars - 1) = screen%cells(srow, scol:scol + nchars - 1)
     end subroutine
+
+    ! Build an SGR escape sequence for a cell's attributes. Returns byte length.
+    ! sgr must be at least 32 chars. Emits nothing (len=0) for default attributes.
+    function build_sgr(cell, sgr) result(slen)
+        type(term_cell), intent(in) :: cell
+        character(kind=c_char), intent(out) :: sgr(*)
+        integer :: slen
+        integer :: p, n
+        character(len=24) :: s
+        s = ''
+        n = 0
+        if (cell%reverse) then
+            n = n + 1; s(n:n) = '7'
+        end if
+        if (cell%bold) then
+            if (n > 0) then; n = n + 1; s(n:n) = ';'; end if
+            n = n + 1; s(n:n) = '1'
+        end if
+        if (cell%fg /= 7) then
+            if (n > 0) then; n = n + 1; s(n:n) = ';'; end if
+            write (s(n+1:n+7), '(A,I2.2)') '38;5;', cell%fg
+            n = n + 7
+        end if
+        if (cell%bg /= 0) then
+            if (n > 0) then; n = n + 1; s(n:n) = ';'; end if
+            write (s(n+1:n+7), '(A,I2.2)') '48;5;', cell%bg
+            n = n + 7
+        end if
+        if (n == 0) then
+            slen = 0
+            return
+        end if
+        ! wrap in ESC[ ... m
+        sgr(1) = achar(27); sgr(2) = '['
+        do p = 1, n
+            sgr(2 + p) = s(p:p)
+        end do
+        sgr(3 + n) = 'm'
+        slen = 3 + n
+    end function
 
     ! Status line at the bottom: tab bar showing sessions.
     subroutine render_status_line(n_sessions, active_idx, titles, scroll_mode, cols)

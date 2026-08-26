@@ -1,0 +1,9 @@
+build/*.o
+build/*.mod
+build/aura.exe
+build/aura_test.exe
+build/e2e_final.exe
+build/aura_gui.exe
+build/*_test.exe
+build/*.bin
+build/dbg_*.txt

@@ -25,7 +25,7 @@ module aura_keys
     integer, parameter, public :: KEY_DEL=9,  KEY_INS=10
 
     public :: keys_raw_enter, keys_raw_exit, poll_key, key_to_vt
-    public :: con_write_at_f, con_get_size_f, con_write_at_w
+    public :: con_write_at_f, con_get_size_f, con_write_at_w, con_set_cursor_f, con_show_cursor_f, con_hide_cursor_f
 
     interface
         subroutine aura_con_raw_enter() bind(C, name='aura_con_raw_enter')
@@ -35,6 +35,10 @@ module aura_keys
         subroutine aura_con_hide_cursor() bind(C, name='aura_con_hide_cursor')
         end subroutine
         subroutine aura_con_show_cursor() bind(C, name='aura_con_show_cursor')
+        end subroutine
+        subroutine aura_con_set_cursor(col, row) bind(C, name='aura_con_set_cursor')
+            import c_int
+            integer(kind=c_int), value :: col, row
         end subroutine
         subroutine aura_con_get_size(cols, rows) bind(C, name='aura_con_get_size')
             import c_int
@@ -96,6 +100,19 @@ contains
         cols = int(c); rows = int(r)
     end subroutine
 
+    subroutine con_set_cursor_f(col, row)
+        integer, intent(in) :: col, row
+        integer(c_int) :: c, r
+        c = int(col, c_int); r = int(row, c_int)
+        call aura_con_set_cursor(c, r)
+    end subroutine
+    subroutine con_show_cursor_f()
+        call aura_con_show_cursor()
+    end subroutine
+    subroutine con_hide_cursor_f()
+        call aura_con_hide_cursor()
+    end subroutine
+
     ! Poll with timeout. Returns .true. if an event arrived.
     function poll_key(wait_ms, ev) result(got)
         integer, intent(in) :: wait_ms
@@ -122,6 +139,19 @@ contains
         ev%ctrl = int(cv) /= 0
         ev%shift = int(sv) /= 0
         ev%alt = int(av) /= 0
+        ! Canonicalize Ctrl+letter: always report lowercase codepoint + shift flag
+        ! set, so a single convention works for both the real-console path
+        ! (which sends 'A' when Shift is held) and the ConPTY path (which sends a
+        ! bare control byte 0x01 with no modifier info).
+        if (ev%ctrl .and. ev%kind == KEV_CHAR) then
+            if (ev%codepoint >= iachar('A') .and. ev%codepoint <= iachar('Z')) then
+                ev%codepoint = ev%codepoint + (iachar('a') - iachar('A'))
+                ev%shift = .true.
+            else if (ev%codepoint >= 1 .and. ev%codepoint <= 26) then
+                ev%codepoint = ev%codepoint + (iachar('a') - 1)
+                ev%shift = .true.
+            end if
+        end if
     end function
 
     ! Encode a key event as the VT/byte sequence the child PTY expects.
