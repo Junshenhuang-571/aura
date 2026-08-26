@@ -426,6 +426,7 @@ contains
                 linebuf = ans(pos0:pos0 + nl - 2)
                 pos0 = pos0 + nl
             end if
+            call relabel_ai_line(linebuf)
             call con_write_at_f(0, ln, adjustl(linebuf))
             ln = ln + 1
         end do
@@ -473,6 +474,18 @@ contains
         end do
         cc = 0_c_int; rr = int(row0, c_int)
         call con_write_at_w(cc, rr, w, int(min(ncols, 250), c_int))
+    end subroutine
+
+    ! Rewrite the cryptic 'CMD:'/'WHY:' parse labels into clean human text for
+    ! display. The raw answer still contains 'CMD:' (kept as the suggested_command
+    ! parse anchor); only the rendered copy is relabeled.
+    subroutine relabel_ai_line(line)
+        character(len=*), intent(inout) :: line
+        integer :: p
+        p = index(line, 'CMD:')
+        if (p /= 0) line = 'Suggested command: '//adjustl(line(p + 4:))
+        p = index(line, 'WHY:')
+        if (p /= 0) line = 'Why: '//adjustl(line(p + 4:))
     end subroutine
 
 end program

@@ -83,13 +83,17 @@ contains
     end function
 
     ! Extract first "content":"..." string from chat-completion JSON.
+    ! Uses an explicit length counter (out_len) instead of trim() so that
+    ! spaces inside the reply are NOT stripped (trim() would eat a trailing
+    ! space on the next appended character).
     function extract_content(raw) result(out)
         character(len=*), intent(in) :: raw
         character(len=4096) :: out
-        integer :: p, i
+        integer :: p, i, out_len
         logical :: esc
 
         out = ''
+        out_len = 0
         p = index(raw, '"content"')
         if (p == 0) return
         ! advance to opening quote of the value
@@ -104,11 +108,11 @@ contains
             if (esc) then
                 select case (raw(i:i))
                 case ('n')
-                    out = trim(out)//new_line('a')
+                    if (out_len < 4090) then; out_len = out_len + 1; out(out_len:out_len) = new_line('a'); end if
                 case ('t')
-                    out = trim(out)//achar(9)
+                    if (out_len < 4090) then; out_len = out_len + 1; out(out_len:out_len) = achar(9); end if
                 case default
-                    out = trim(out)//raw(i:i)
+                    if (out_len < 4090) then; out_len = out_len + 1; out(out_len:out_len) = raw(i:i); end if
                 end select
                 esc = .false.
             else if (raw(i:i) == '\') then
@@ -116,9 +120,8 @@ contains
             else if (raw(i:i) == '"') then
                 return                  ! closing quote
             else
-                out = trim(out)//raw(i:i)
+                if (out_len < 4090) then; out_len = out_len + 1; out(out_len:out_len) = raw(i:i); end if
             end if
-            if (len_trim(out) >= 4000) return
             i = i + 1
         end do
     end function
