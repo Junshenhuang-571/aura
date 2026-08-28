@@ -245,9 +245,12 @@ contains
     logical function is_reserved(ev) result(r)
         type(key_event), intent(in) :: ev
         r = .false.
-        if (ev%ctrl .and. ev%kind == KEV_CHAR) then
-            if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
-                .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('p')) r = .true.
+        if (ev%kind == KEV_CHAR) then
+            if (ev%ctrl) then
+                if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
+                    .or. ev%codepoint == iachar('w')) r = .true.
+            end if
+            if (ev%alt .and. ev%codepoint == iachar('p')) r = .true.
         end if
     end function
 
@@ -261,8 +264,8 @@ contains
             call ai_drawer()
             return
         end if
-        ! Ctrl+P -> cycle workspace
-        if (ev%ctrl .and. ev%codepoint == iachar('p')) then
+        ! Alt+P -> cycle workspace
+        if (ev%alt .and. ev%codepoint == iachar('p')) then
             call ws_reg%switch_to(mod(ws_reg%active, ws_reg%n) + 1)
             ws => ws_reg%current()
             ws%scroll_mode = .false.
