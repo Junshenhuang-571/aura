@@ -247,7 +247,7 @@ contains
         r = .false.
         if (ev%ctrl .and. ev%kind == KEV_CHAR) then
             if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
-                .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('s')) r = .true.
+                .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('p')) r = .true.
         end if
     end function
 
@@ -261,8 +261,8 @@ contains
             call ai_drawer()
             return
         end if
-        ! Ctrl+S -> cycle workspace
-        if (ev%ctrl .and. ev%codepoint == iachar('s')) then
+        ! Ctrl+P -> cycle workspace
+        if (ev%ctrl .and. ev%codepoint == iachar('p')) then
             call ws_reg%switch_to(mod(ws_reg%active, ws_reg%n) + 1)
             ws => ws_reg%current()
             ws%scroll_mode = .false.
