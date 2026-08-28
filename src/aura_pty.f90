@@ -68,7 +68,8 @@ contains
         character(len=:), allocatable, intent(out) :: buf
         character(kind=c_char), target :: cbuf(4096)
         integer(c_int) :: n
-        integer :: i, nbytes
+        integer :: i
+        integer(i4) :: nbytes
         n = c_pty_read(handle, cbuf, int(size(cbuf), c_int))
         if (n <= 0) then
             buf = ''

@@ -154,7 +154,16 @@ contains
         start = 1; cnt = 0
         if (len_trim(buf) == 0) return
         do i = 1, len_trim(buf) + 1
-            if (i > len_trim(buf) .or. buf(i:i) == ';') then
+            if (i > len_trim(buf)) then
+                cnt = cnt + 1
+                if (cnt == idx) then
+                    if (start <= len_trim(buf)) then
+                        read (buf(start:len_trim(buf)), *, iostat=ios) val
+                    end if
+                    return
+                end if
+                exit
+            else if (buf(i:i) == ';') then
                 cnt = cnt + 1
                 if (cnt == idx) then
                     read(buf(start:i - 1), *, iostat=ios) val
