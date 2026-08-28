@@ -74,7 +74,7 @@ program aura_main
         ! load workspaces (or create default)
         call ws_reg%load()
         if (ws_reg%n == 0) then
-            call ws_reg%add('default', '.', idx)
+            call reg_add(ws_reg, 'default', '.', idx)
         end if
         ws => ws_reg%current()
 
@@ -404,7 +404,7 @@ contains
             else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
                 done = .true.
                 if (qlen > 0) then
-                    call ws_reg%add(trim(qlin(:qlen)), '.', i)
+                    call reg_add(ws_reg, trim(qlin(:qlen)), '.', i)
                     ws_reg%active = int(i, i4)
                 end if
             else if (aev%codepoint == 8 .or. aev%codepoint == 127) then

@@ -36,10 +36,10 @@ module aura_workspace
         character(len=512) :: tab_cwds(MAX_TABS)
         integer(i4) :: n_tabs = 0
         integer(i4) :: active_tab = 1
-        ! per-workspace session state (tabs)
-        type(term_session) :: sess(MAX_TABS)
-        integer(c_long_long) :: handle(MAX_TABS)
-        character(len=32) :: titles(MAX_TABS)
+        ! per-workspace session state (tabs) — allocatable to avoid stack overflow
+        type(term_session), allocatable :: sess(:)
+        integer(c_long_long), allocatable :: handle(:)
+        character(len=32), allocatable :: titles(:)
         integer(i4) :: n_sess = 0
         integer(i4) :: active = 1
         logical :: scroll_mode = .false.
@@ -54,7 +54,6 @@ module aura_workspace
         integer(i4) :: n = 0
         integer(i4) :: active = 1
     contains
-        procedure :: add
         procedure :: remove
         procedure :: switch_to
         procedure :: current
@@ -63,7 +62,7 @@ module aura_workspace
     end type
 
     public :: default_workspace
-
+    public :: reg_add
 contains
 
     subroutine add_message(self, role, content)
@@ -143,21 +142,25 @@ contains
         call self%ai%ctx_from_json(text)
     end subroutine
 
-    subroutine add(self, name, cwd, idx)
-        class(workspace_registry), intent(inout) :: self
+    subroutine reg_add(reg, name, cwd, idx)
+        type(workspace_registry), intent(inout) :: reg
         character(len=*), intent(in) :: name, cwd
         integer(i4), intent(out) :: idx
-        if (self%n >= MAX_WORKSPACES) then
-            idx = -1; return
+        if (reg%n >= MAX_WORKSPACES) then
+            idx = -1
+            return
         end if
-        self%n = self%n + 1
-        if (.not. associated(self%items)) allocate(self%items(MAX_WORKSPACES))
-        idx = self%n
-        self%items(idx)%name = name
-        self%items(idx)%cwd = cwd
-        self%items(idx)%ai%system_prompt = default_system_prompt(name, cwd)
-        self%items(idx)%n_tabs = 0
-        self%items(idx)%active_tab = 1
+        reg%n = reg%n + 1
+        if (.not. associated(reg%items)) allocate(reg%items(MAX_WORKSPACES))
+        idx = reg%n
+        reg%items(idx)%name = name
+        reg%items(idx)%cwd = cwd
+        reg%items(idx)%ai%system_prompt = default_system_prompt(name, cwd)
+        reg%items(idx)%n_tabs = 0
+        reg%items(idx)%active_tab = 1
+        allocate(reg%items(idx)%sess(MAX_TABS))
+        allocate(reg%items(idx)%handle(MAX_TABS))
+        allocate(reg%items(idx)%titles(MAX_TABS))
     end subroutine
 
     subroutine remove(self, idx)
@@ -182,7 +185,7 @@ contains
         class(workspace_registry), intent(inout) :: self
         type(workspace), pointer :: w
         integer(i4) :: idx
-        if (self%n == 0) call self%add('default', '.', idx)
+        if (self%n == 0) call reg_add(self, 'default', '.', idx)
         w => self%items(self%active)
     end function
 
