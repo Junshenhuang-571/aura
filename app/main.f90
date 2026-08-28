@@ -347,6 +347,7 @@ contains
         s%input_line = ''
         s%cwd = ''
         s%alive = .false.
+        if (.not. allocated(s%scrollback)) allocate(character(len=LINE_LEN)::s%scrollback(MAX_LINES))
         call s%screen%resize(GRID_ROWS, GRID_COLS)
     end subroutine
 

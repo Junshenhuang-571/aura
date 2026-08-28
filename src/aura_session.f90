@@ -9,11 +9,10 @@ module aura_session
     integer(i4), parameter, public :: LINE_LEN = 256
 
     type, public :: term_session
-        character(len=LINE_LEN)      :: scrollback(MAX_LINES) = ''
-        integer(i4)                  :: n_lines = 0          ! lines used
-        character(len=:), allocatable:: pending              ! partial line from PTY
+        character(len=:), allocatable :: scrollback(:)  ! allocatable to avoid stack overflow
+        integer(i4)                  :: n_lines = 0
+        character(len=:), allocatable:: pending
         type(ansi_parser)            :: screen
-        ! platform-specific PTY handle stored as integer token by pty layer
         integer(i8)   :: pty_handle = 0
         logical                      :: alive = .false.
         character(len=512)           :: cwd = ''
@@ -77,7 +76,7 @@ contains
         character(len=*), intent(in) :: line
         integer(i4) :: i
         character(len=LINE_LEN) :: cleaned
-
+        if (.not. allocated(self%scrollback)) allocate(character(len=LINE_LEN)::self%scrollback(MAX_LINES))
         cleaned = strip_ctrl(line)
         if (self%n_lines >= MAX_LINES) then
             do i = 1, MAX_LINES - 1
