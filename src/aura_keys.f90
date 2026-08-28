@@ -165,7 +165,7 @@ contains
             if (ev%codepoint >= iachar('A') .and. ev%codepoint <= iachar('Z')) then
                 ev%codepoint = ev%codepoint + (iachar('a') - iachar('A'))
                 ev%shift = .true.
-            else if (ev%codepoint >= 1 .and. ev%codepoint <= 26) then
+            else if (ev%codepoint >= 1 .and. ev%codepoint <= 26 .and. ev%codepoint /= 9) then
                 ev%codepoint = ev%codepoint + (iachar('a') - 1)
                 ev%shift = .true.
             end if

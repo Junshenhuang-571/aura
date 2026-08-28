@@ -245,6 +245,10 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
             case VK_NEXT:  out->ev_key = 8; break;
             case VK_DELETE:out->ev_key = 9; break;
             case VK_INSERT:out->ev_key = 10;break;
+            case VK_TAB:
+                out->ev_type = 1;
+                out->ch = 9;
+                return 1;
             case VK_F1: case VK_F2: case VK_F3: case VK_F4:
             case VK_F5: case VK_F6: case VK_F7: case VK_F8:
             case VK_F9: case VK_F10: case VK_F11: case VK_F12:
