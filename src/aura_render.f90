@@ -6,6 +6,7 @@ module aura_render
     use aura_ansi
     use aura_keys
     use aura_theme
+    use aura_workspace
     implicit none
     private
 
@@ -185,34 +186,35 @@ contains
     end function
 
     ! Status line at the bottom: styled session tab bar + AI hint.
-    subroutine render_status_line(n_sessions, active_idx, titles, scroll_mode, cols)
-        integer, intent(in) :: n_sessions, active_idx, cols
-        character(len=*), intent(in) :: titles(:)
-        logical, intent(in) :: scroll_mode
-        integer :: i, pos
+    subroutine render_status_line(reg, cols)
+        type(workspace_registry), intent(inout) :: reg
+        integer, intent(in) :: cols
+        type(workspace), pointer :: ws
+        integer :: i, pos, rr
         character(len=16) :: num
-        integer :: rr
         rr = rows_for_status()
+        ws => reg%current()
         ! clear the whole strip first
         call con_write_at_s(0, rr, repeat(' ', min(cols, 500)), C_BG, C_BG, .false., .false.)
         pos = 1
-        ! brand mark
-        call con_write_at_s(pos, rr, b_dot()//' Aura', C_ACCENT, C_BG, .true., .false.)
-        pos = pos + 7
-        do i = 1, n_sessions
-            if (i == active_idx) then
+        ! brand mark + workspace name
+        call con_write_at_s(pos, rr, b_dot()//' '//trim(ws%name), C_ACCENT, C_BG, .true., .false.)
+        pos = pos + 2 + len_trim(ws%name) + 2
+        ! tabs
+        do i = 1, ws%n_sess
+            if (i == ws%active) then
                 write (num, '(I0,A)') i, ':*'
-                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(titles(i))//' ', &
+                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(ws%titles(i))//' ', &
                                     C_BG, C_ACCENT, .true., .false.)
             else
                 write (num, '(I0,A)') i, ':'
-                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(titles(i))//' ', &
+                call con_write_at_s(pos, rr, ' '//trim(num)//' '//adjustl(ws%titles(i))//' ', &
                                     C_DIM, C_BG, .false., .false.)
             end if
-            pos = pos + 2 + len_trim(num) + 1 + len_trim(adjustl(titles(i))) + 2
+            pos = pos + 2 + len_trim(num) + 1 + len_trim(adjustl(ws%titles(i))) + 2
             if (pos > cols - 16) exit
         end do
-        if (scroll_mode) then
+        if (ws%scroll_mode) then
             call con_write_at_s(max(0, cols - 11), rr, ' [SCROLL] ', C_WARN, C_BG, .true., .false.)
         else
             call con_write_at_s(max(0, cols - 11), rr, ' Ctrl+A AI', C_ACCENT2, C_BG, .false., .false.)

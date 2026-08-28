@@ -4,6 +4,9 @@
 !   aura --cli      -> legacy line-based mode (debugging)
 !   aura --ask "…"  -> one-shot AI query
 !   aura --config   -> write default config
+!
+! Workspaces: each workspace is a named project scope with its own cwd, tabs,
+! and AI conversation context. The TUI operates on the active workspace.
 program aura_main
     use iso_fortran_env, only: i4 => int32
     use iso_c_binding, only: c_long_long
@@ -15,25 +18,21 @@ program aura_main
     use aura_ai
     use aura_config
     use aura_theme
+    use aura_workspace
     implicit none
 
     integer, parameter :: MAX_SESS = 8
-    integer(i4) :: GRID_ROWS = 30, GRID_COLS = 100   ! mutable; set from real terminal size at boot
+    integer(i4) :: GRID_ROWS = 30, GRID_COLS = 100
 
-    type(term_session), allocatable :: sess(:)      ! heap: big arrays inside
-    integer(c_long_long), allocatable :: handle(:)
-    character(len=32), allocatable :: titles(:)
-    integer :: n_sess, active
-    logical :: scroll_mode
-    integer :: scroll_top
+    type(workspace_registry) :: ws_reg
+    type(workspace), pointer :: ws
+
     type(aura_cfg) :: cfg
     integer :: con_cols, con_rows
     integer(i4) :: rc_dummy
 
-    n_sess = 0; active = 0; scroll_mode = .false.; scroll_top = 1
-    con_cols = 100; con_rows = 30
     rc_dummy = 0
-    allocate(sess(MAX_SESS), handle(MAX_SESS), titles(MAX_SESS))
+    con_cols = 100; con_rows = 30
 
     ! ---- dispatch on args ----
     block
@@ -63,6 +62,7 @@ program aura_main
     ! ---- boot TUI ----
     block
         integer :: u
+        integer(i4) :: idx
         open (newunit=u, file='aura_boot.log', status='replace', action='write')
         write (u, '(A)') 'boot: start'
         flush (u)
@@ -70,10 +70,20 @@ program aura_main
         call ai_init(cfg)
         write (u, '(A)') 'boot: cfg loaded, shell='//trim(cfg%shell_path)
         flush (u)
+
+        ! load workspaces (or create default)
+        call ws_reg%load()
+        if (ws_reg%n == 0) then
+            call ws_reg%add('default', '.', idx)
+        end if
+        ws => ws_reg%current()
+
+        ! spawn initial session in the active workspace
         call spawn_session(cfg%shell_path)
-        write (u, '(A,I0)') 'boot: spawned sessions=', n_sess
+        write (u, '(A,I0)') 'boot: spawned sessions=', ws%n_sess
         flush (u)
-        if (n_sess == 0) then
+
+        if (ws%n_sess == 0) then
             block
                 use iso_c_binding, only: c_int, c_char, c_null_char
                 integer :: m
@@ -103,14 +113,22 @@ program aura_main
         flush (u)
         call tui_loop()
         write (u, '(A)') 'boot: tui_loop returned'
+        call ws_reg%save()
         call keys_raw_exit()
         call reset_theme()
         close (u)
     end block
 
-    do active = 1, n_sess
-        if (sess(active)%alive) call pty_close(handle(active))
-    end do
+    ! close all sessions in all workspaces
+    block
+        integer :: i, j
+        do i = 1, ws_reg%n
+            ws => ws_reg%items(i)
+            do j = 1, ws%n_sess
+                if (ws%sess(j)%alive) call pty_close(ws%handle(j))
+            end do
+        end do
+    end block
     print *, 'Aura closed.'
 
 contains
@@ -157,49 +175,51 @@ contains
     subroutine tui_loop()
         logical :: running
         type(key_event) :: ev
+        integer :: i
 
         running = .true.
         do while (running)
-            ! 1. pump all sessions
-            do active = 1, n_sess
-                if (sess(active)%alive) call drain_session(sess(active), handle(active), 5)
+            ! 1. pump all sessions in active workspace
+            ws => ws_reg%current()
+            do i = 1, ws%n_sess
+                if (ws%sess(i)%alive) call drain_session(ws%sess(i), ws%handle(i), 5)
             end do
-            active = max(1, min(active, n_sess))
+            ws%active = max(1, min(ws%n_sess, ws%n_sess))
+            if (ws%n_sess > 0) ws%active = min(ws%active, ws%n_sess)
 
             call con_get_size_f(con_cols, con_rows)
 
             ! 2. render
-            if (.not. scroll_mode) then
-                call render_grid(sess(active)%screen)
+            if (.not. ws%scroll_mode) then
+                call render_grid(ws%sess(ws%active)%screen)
             else
-                call render_scrollback_view(sess(active)%scrollback, &
-                    int(sess(active)%n_lines), scroll_top, con_rows, con_cols)
+                call render_scrollback_view(ws%sess(ws%active)%scrollback, &
+                    int(ws%sess(ws%active)%n_lines), ws%scroll_top, con_rows, con_cols)
             end if
-            call render_status_line(n_sess, active, titles(:n_sess), scroll_mode, con_cols)
+            call render_status_line(ws_reg, con_cols)
 
             ! 3. key event
             if (poll_key(30, ev)) then
                 select case (ev%kind)
                 case (KEV_RESIZE)
-                    ! Re-query real terminal size (ConPTY-aware) and resize grid + PTY.
                     if (con_refresh_size_f() /= 0) then
                         call con_get_size_f(con_cols, con_rows)
                         if (con_cols >= 20 .and. con_rows >= 6) then
                             GRID_COLS = con_cols
                             GRID_ROWS = con_rows
-                            call sess(active)%screen%resize(int(GRID_ROWS, i4), int(GRID_COLS, i4))
-                            call pty_resize(handle(active), GRID_COLS, GRID_ROWS)
+                            call ws%sess(ws%active)%screen%resize(int(GRID_ROWS, i4), int(GRID_COLS, i4))
+                            call pty_resize(ws%handle(ws%active), GRID_COLS, GRID_ROWS)
                         end if
                     end if
                     call invalidate_mirror()
                 case (KEV_CHAR)
                     if (is_reserved(ev)) then
                         running = handle_reserved(ev)
-                    else if (scroll_mode) then
-                        scroll_mode = .false.
+                    else if (ws%scroll_mode) then
+                        ws%scroll_mode = .false.
                         call invalidate_mirror()
                     else
-                        call send_key_vt(ev, handle(active))
+                        call send_key_vt(ev, ws%handle(ws%active))
                     end if
                 case (KEV_SPECIAL)
                     select case (ev%special)
@@ -208,16 +228,16 @@ contains
                     case (KEY_PGDN)
                         call do_scroll(+10)
                     case default
-                        if (.not. scroll_mode) call send_key_vt(ev, handle(active))
+                        if (.not. ws%scroll_mode) call send_key_vt(ev, ws%handle(ws%active))
                     end select
                 end select
             end if
 
             ! 4. reap dead active session
-            if (.not. sess(active)%alive) then
-                call pty_close(handle(active))
-                call remove_session(active)
-                if (n_sess == 0) running = .false.
+            if (.not. ws%sess(ws%active)%alive) then
+                call pty_close(ws%handle(ws%active))
+                call remove_session(ws%active)
+                if (ws%n_sess == 0) running = .false.
             end if
         end do
     end subroutine
@@ -225,8 +245,6 @@ contains
     logical function is_reserved(ev) result(r)
         type(key_event), intent(in) :: ev
         r = .false.
-        ! Ctrl+<letter> reserved keys (Ctrl+A/Ctrl+T/Ctrl+W). poll_key canonicalizes
-        ! a bare Ctrl+letter into lowercase+shift, so Ctrl+A matches here as ctrl+shift+'a'.
         if (ev%ctrl .and. ev%shift .and. ev%kind == KEV_CHAR) then
             if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
                 .or. ev%codepoint == iachar('w')) r = .true.
@@ -235,32 +253,36 @@ contains
 
     logical function handle_reserved(ev) result(keep_running)
         type(key_event), intent(in) :: ev
+        integer(i4) :: idx
         keep_running = .true.
 
-        ! Ctrl+A -> AI drawer (Ctrl+Shift+A canonicalized to the same)
+        ! Ctrl+A -> AI drawer
         if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('a')) then
             call ai_drawer()
             return
         end if
-        ! Ctrl+Tab -> cycle session
+        ! Ctrl+Tab -> cycle workspace
         if (ev%ctrl .and. ev%codepoint == 9) then
-            active = mod(active, n_sess) + 1
-            scroll_mode = .false.
+            call ws_reg%switch_to(mod(ws_reg%active, ws_reg%n) + 1)
+            ws => ws_reg%current()
+            ws%scroll_mode = .false.
             call invalidate_mirror()
             return
         end if
+        ! Ctrl+T -> new tab in active workspace
         if (ev%ctrl .and. ev%codepoint == iachar('t')) then
-            if (n_sess < MAX_SESS) then
+            if (ws%n_sess < MAX_SESS) then
                 call spawn_session(cfg%shell_path)
                 call invalidate_mirror()
             end if
             return
         end if
+        ! Ctrl+W -> workspace picker (create/switch/close)
         if (ev%ctrl .and. ev%codepoint == iachar('w')) then
-            if (sess(active)%alive) then
-                call pty_close(handle(active))
-                sess(active)%alive = .false.
-            end if
+            call workspace_picker()
+            ws => ws_reg%current()
+            call invalidate_mirror()
+            return
         end if
     end function
 
@@ -279,42 +301,42 @@ contains
         integer, intent(in) :: delta
         integer :: maxtop, vis
         vis = con_rows - 2
-        maxtop = max(1, int(sess(active)%n_lines) - vis + 1)
-        if (.not. scroll_mode) then
-            scroll_mode = .true.
-            scroll_top = max(1, int(sess(active)%n_lines) - vis + 1)
+        maxtop = max(1, int(ws%sess(ws%active)%n_lines) - vis + 1)
+        if (.not. ws%scroll_mode) then
+            ws%scroll_mode = .true.
+            ws%scroll_top = max(1, int(ws%sess(ws%active)%n_lines) - vis + 1)
             return
         end if
-        scroll_top = min(max(1, scroll_top + delta), maxtop)
+        ws%scroll_top = min(max(1, ws%scroll_top + delta), maxtop)
     end subroutine
 
     subroutine spawn_session(shellcmd)
         character(len=*), intent(in) :: shellcmd
         integer :: qc, qr
-        if (n_sess >= MAX_SESS) return
-        call con_get_size_f(qc, qr)         ! real terminal size (ConPTY-aware)
+        if (ws%n_sess >= MAX_SESS) return
+        call con_get_size_f(qc, qr)
         if (qc < 20) qc = 80
         if (qr < 6)  qr = 24
         GRID_COLS = qc
         GRID_ROWS = qr
-        call init_blank(sess(n_sess + 1))
-        if (pty_spawn(shellcmd, GRID_COLS, GRID_ROWS, handle(n_sess + 1)) /= 0) return
-        n_sess = n_sess + 1
-        sess(n_sess)%alive = .true.
-        write (titles(n_sess), '(A,I0)') 'shell', n_sess
-        active = n_sess
+        call init_blank(ws%sess(ws%n_sess + 1))
+        if (pty_spawn(shellcmd, GRID_COLS, GRID_ROWS, ws%handle(ws%n_sess + 1)) /= 0) return
+        ws%n_sess = ws%n_sess + 1
+        ws%sess(ws%n_sess)%alive = .true.
+        write (ws%titles(ws%n_sess), '(A,I0)') 'shell', ws%n_sess
+        ws%active = ws%n_sess
     end subroutine
 
     subroutine remove_session(idx)
         integer, intent(in) :: idx
         integer :: j
         do j = idx, MAX_SESS - 1
-            sess(j) = sess(j + 1)
-            handle(j) = handle(j + 1)
-            titles(j) = titles(j + 1)
+            ws%sess(j) = ws%sess(j + 1)
+            ws%handle(j) = ws%handle(j + 1)
+            ws%titles(j) = ws%titles(j + 1)
         end do
-        n_sess = n_sess - 1
-        if (active > n_sess) active = max(1, n_sess)
+        ws%n_sess = ws%n_sess - 1
+        if (ws%active > ws%n_sess) ws%active = max(1, ws%n_sess)
         call invalidate_mirror()
     end subroutine
 
@@ -349,6 +371,53 @@ contains
         end do
     end subroutine
 
+    ! ---- workspace picker ----
+    subroutine workspace_picker()
+        character(len=1024) :: qlin
+        integer :: top, ln, qlen, i
+        logical :: done
+        type(key_event) :: aev
+
+        top = max(1, con_rows - 10)
+        call clear_drawer(top)
+        call draw_hline(top, con_cols)
+        call con_write_at_s(2, top, b_dot()//' Workspaces', C_ACCENT, C_BG, .true., .false.)
+        call con_write_at_s(con_cols - 18, top, ' name+Enter new', C_DIM, C_BG, .false., .false.)
+        ln = top + 1
+        do i = 1, ws_reg%n
+            if (i == ws_reg%active) then
+                call con_write_at_s(2, ln, ' > '//trim(ws_reg%items(i)%name), C_ACCENT2, C_BG, .true., .false.)
+            else
+                call con_write_at_s(2, ln, '   '//trim(ws_reg%items(i)%name), C_DIM, C_BG, .false., .false.)
+            end if
+            ln = ln + 1
+        end do
+        qlin = ''
+        qlen = 0
+        done = .false.
+        do while (.not. done)
+            call con_write_at_s(3, con_rows - 3, b_arrow()//' '//qlin(:qlen)//'_   (Esc closes)', C_ACCENT2, C_BG, .false., .false.)
+            if (.not. poll_key(-1, aev)) cycle
+            if (aev%kind /= KEV_CHAR) cycle
+            if (aev%codepoint == 27) then
+                done = .true.
+            else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
+                done = .true.
+                if (qlen > 0) then
+                    call ws_reg%add(trim(qlin(:qlen)), '.', i)
+                    ws_reg%active = int(i, i4)
+                end if
+            else if (aev%codepoint == 8 .or. aev%codepoint == 127) then
+                if (qlen > 0) qlen = qlen - 1
+            else if (.not. aev%ctrl .and. aev%codepoint >= 32 .and. qlen < len(qlin)) then
+                qlen = qlen + 1
+                qlin(qlen:qlen) = achar(min(aev%codepoint, 255))
+            end if
+        end do
+        call clear_drawer(top)
+        call invalidate_mirror()
+    end subroutine
+
     ! ---- AI drawer ----
     subroutine ai_drawer()
         character(len=1024) :: qlin
@@ -377,15 +446,18 @@ contains
             else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
                 done = .true.
                 if (qlen > 0) then
-                    answer = ai_query(qlin(:qlen), sess(active)%last_lines(15), trim(cwdv))
+                    answer = ai_query(qlin(:qlen), ws%sess(ws%active)%last_lines(15), trim(cwdv))
+                    ! record in workspace AI context
+                    call ws%ai%add_message('user', qlin(:qlen))
+                    call ws%ai%add_message('assistant', answer)
                     want_insert = .false.; want_exec = .false.; keep_open = .false.
                     call answer_view(drawer_top, answer, want_insert, want_exec, keep_open)
                     if (want_insert .or. want_exec) then
                         cmdline = suggested_command(answer)
                         if (len_trim(cmdline) > 0) then
-                            rc_dummy = pty_write_text(handle(active), trim(cmdline))
+                            rc_dummy = pty_write_text(ws%handle(ws%active), trim(cmdline))
                             if (want_exec) &
-                                rc_dummy = pty_write_bytes(handle(active), (/ achar(13) /), 1)
+                                rc_dummy = pty_write_bytes(ws%handle(ws%active), (/ achar(13) /), 1)
                             call invalidate_mirror()
                         end if
                     end if
@@ -477,7 +549,7 @@ contains
         end if
     end function
 
-    ! Draw a boxed horizontal rule: top = ├─...─┤ style with a centered title.
+    ! Draw a boxed horizontal rule: ├─...─┤
     subroutine draw_hline(row0, ncols)
         use iso_c_binding, only: c_int
         integer, intent(in) :: row0, ncols
@@ -485,18 +557,15 @@ contains
         integer(kind=2) :: w(256)
         integer :: j, lim
         lim = min(ncols, 250)
-        w(1) = int(z'251C', kind=2)          ! ├
+        w(1) = int(z'251C', kind=2)
         do j = 2, lim - 1
-            w(j) = int(z'2500', kind=2)      ! ─
+            w(j) = int(z'2500', kind=2)
         end do
-        if (lim >= 2) w(lim) = int(z'2524', kind=2)   ! ┤
+        if (lim >= 2) w(lim) = int(z'2524', kind=2)
         cc = 0_c_int; rr = int(row0, c_int)
         call con_write_at_w(cc, rr, w, int(lim, c_int))
     end subroutine
 
-    ! Rewrite the cryptic 'CMD:'/'WHY:' parse labels into clean human text for
-    ! display. The raw answer still contains 'CMD:' (kept as the suggested_command
-    ! parse anchor); only the rendered copy is relabeled.
     subroutine relabel_ai_line(line)
         character(len=*), intent(inout) :: line
         integer :: p

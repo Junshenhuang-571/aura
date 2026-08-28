@@ -3,7 +3,9 @@
 ! AI conversation context (system prompt + history). Persisted to JSON.
 module aura_workspace
     use iso_fortran_env, only: i4 => int32
+    use iso_c_binding, only: c_long_long
     use aura_config, only: config_dir_path
+    use aura_session, only: term_session
     implicit none
     private
 
@@ -34,6 +36,14 @@ module aura_workspace
         character(len=512) :: tab_cwds(MAX_TABS)
         integer(i4) :: n_tabs = 0
         integer(i4) :: active_tab = 1
+        ! per-workspace session state (tabs)
+        type(term_session) :: sess(MAX_TABS)
+        integer(c_long_long) :: handle(MAX_TABS)
+        character(len=32) :: titles(MAX_TABS)
+        integer(i4) :: n_sess = 0
+        integer(i4) :: active = 1
+        logical :: scroll_mode = .false.
+        integer :: scroll_top = 1
     contains
         procedure :: ws_to_json => workspace_to_json
         procedure :: ws_from_json => workspace_from_json
