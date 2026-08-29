@@ -137,6 +137,9 @@ contains
             self%cur_row = self%cur_row + 1
             call self%scroll_check()
         end if
+        ! Clamp cursor to valid bounds to prevent segfault
+        self%cur_row = max(1, min(self%rows, self%cur_row))
+        self%cur_col = max(1, min(self%cols, self%cur_col))
         self%cells(self%cur_row, self%cur_col)%ch = ch
         self%cells(self%cur_row, self%cur_col)%fg = self%cur_fg
         self%cells(self%cur_row, self%cur_col)%bg = self%cur_bg
