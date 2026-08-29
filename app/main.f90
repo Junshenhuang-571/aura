@@ -200,6 +200,22 @@ contains
 
             ! 3. key event
             if (poll_key(30, ev)) then
+                ! DEBUG: show last key in status bar
+                block
+                    character(len=64) :: kdbg
+                    character(len=16) :: ktype
+                    if (ev%kind == KEV_CHAR) then
+                        ktype = 'CHAR'
+                    else if (ev%kind == KEV_SPECIAL) then
+                        ktype = 'SPEC'
+                    else
+                        ktype = 'RESZ'
+                    end if
+                    write (kdbg, '(A,A,A,I0,A,I0,A,I0,A,I0)') &
+                        trim(ktype), ' cp=', ev%codepoint, ' sp=', ev%special, &
+                        ' ctrl=', merge(1, 0, ev%ctrl), ' shift=', merge(1, 0, ev%shift)
+                    call con_write_at_s(1, con_rows - 1, kdbg, C_DIM, C_BG, .false., .false.)
+                end block
                 select case (ev%kind)
                 case (KEV_RESIZE)
                     if (con_refresh_size_f() /= 0) then
