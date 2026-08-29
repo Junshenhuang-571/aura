@@ -30,7 +30,7 @@ $CC -c -O2 csrc/aura_net.c
 $FC -static -Ibuild -Jbuild -fmax-stack-var-size=1024 -o build/aura app/main.f90 weight_module.o llama2_mod.o \
     aura_ansi.o aura_theme.o aura_workspace.o aura_config.o aura_session.o aura_pty.o aura_keys.o \
     aura_render.o aura_ai.o aura_llm.o aura_gui.o \
-    aura_pty_bridge.o aura_console_bridge.o aura_net.o -lws2_32 -Wl,--stack,33554432
+    aura_pty_bridge.o aura_console_bridge.o aura_net.o -lws2_32 -Wl,--stack,67108864
 
 # tests
 $FC -Ibuild -Jbuild -fmax-stack-var-size=1024 -o build/aura_test test/test_aura_ansi.f90 aura_ansi.o aura_theme.o aura_workspace.o \

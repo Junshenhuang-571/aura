@@ -280,6 +280,18 @@ contains
             end if
             return
         end if
+        ! Ctrl+Right -> next tab
+        if (ev%ctrl .and. ev%kind == KEV_SPECIAL .and. ev%special == 4) then
+            ws%active = min(ws%n_sess, ws%active + 1)
+            call invalidate_mirror()
+            return
+        end if
+        ! Ctrl+Left -> previous tab
+        if (ev%ctrl .and. ev%kind == KEV_SPECIAL .and. ev%special == 3) then
+            ws%active = max(1, ws%active - 1)
+            call invalidate_mirror()
+            return
+        end if
         ! Ctrl+W -> workspace picker (create/switch/close)
         if (ev%ctrl .and. ev%codepoint == iachar('w')) then
             call workspace_picker()
