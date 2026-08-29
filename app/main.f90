@@ -268,6 +268,7 @@ contains
             call ws_reg%switch_to(mod(ws_reg%active, ws_reg%n) + 1)
             ws => ws_reg%current()
             ws%scroll_mode = .false.
+            if (ws%n_sess == 0) call spawn_session(cfg%shell_path)
             call invalidate_mirror()
             return
         end if
@@ -409,6 +410,8 @@ contains
                 if (qlen > 0) then
                     call reg_add(ws_reg, trim(qlin(:qlen)), '.', i)
                     ws_reg%active = int(i, i4)
+                    ws => ws_reg%current()
+                    if (ws%n_sess == 0) call spawn_session(cfg%shell_path)
                 end if
             else if (aev%codepoint == 8 .or. aev%codepoint == 127) then
                 if (qlen > 0) qlen = qlen - 1
