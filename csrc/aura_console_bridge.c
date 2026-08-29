@@ -176,6 +176,31 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
                     return 1;
                 }
             }
+            /* Function keys: ESC O P/Q/R/S (F1-F4), ESC [ 1 1 ~ (F1-F12) */
+            if (tot >= 3 && seq[1] == 'O' && seq[2] >= 'P' && seq[2] <= 'S') {
+                out->ev_type = 2;
+                out->ev_key = 11 + (seq[2] - 'P');  /* F1=11, F2=12, F3=13, F4=14 */
+                aura_dbg("key: vt F-key ESC O %c -> key=%d", seq[2], out->ev_key);
+                return 1;
+            }
+            if (tot >= 4 && seq[1] == '[' && seq[2] >= '1' && seq[2] <= '2') {
+                /* ESC [ 1 1 ~ = F1, ESC [ 1 2 ~ = F2, etc. */
+                int fnum = 0;
+                if (tot >= 5 && seq[3] == '~') {
+                    switch (seq[2]) {
+                        case '1': fnum = (tot >= 6 && seq[4] == '1') ? 5 : 1; break; /* F5 vs F1 */
+                        case '2': fnum = (tot >= 6 && seq[4] == '3') ? 8 : 2; break; /* F8 vs F2 */
+                        case '3': fnum = (tot >= 6 && seq[4] == '1') ? 9 : 3; break; /* F9-F12 vs F3 */
+                        case '4': fnum = (tot >= 6 && seq[4] == '3') ? 10 : 4; break;
+                    }
+                }
+                if (fnum > 0) {
+                    out->ev_type = 2;
+                    out->ev_key = 10 + fnum;
+                    aura_dbg("key: vt F-key ESC [ %c %c ~ -> key=%d", seq[2], seq[3], out->ev_key);
+                    return 1;
+                }
+            }
             /* lone ESC (e.g. to close overlay) */
             if (tot == 1) { out->ev_type = 1; out->ch = 27; aura_dbg("key: vt lone-ESC"); return 1; }
             return 0;

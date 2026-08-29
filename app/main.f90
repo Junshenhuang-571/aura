@@ -223,6 +223,12 @@ contains
                     end if
                 case (KEV_SPECIAL)
                     select case (ev%special)
+                    case (KEY_F1)
+                        ws%active = max(1, ws%active - 1)
+                        call invalidate_mirror()
+                    case (KEY_F2)
+                        ws%active = min(ws%n_sess, ws%active + 1)
+                        call invalidate_mirror()
                     case (KEY_PGUP)
                         call do_scroll(-10)
                     case (KEY_PGDN)
@@ -248,8 +254,7 @@ contains
         if (ev%kind == KEV_CHAR) then
             if (ev%ctrl) then
                 if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
-                    .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('r') &
-                    .or. ev%codepoint == iachar(',') .or. ev%codepoint == iachar('.')) r = .true.
+                    .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('r')) r = .true.
             end if
         end if
     end function
@@ -279,18 +284,6 @@ contains
                 call spawn_session(cfg%shell_path)
                 call invalidate_mirror()
             end if
-            return
-        end if
-        ! Ctrl+Comma -> previous tab
-        if (ev%ctrl .and. ev%codepoint == iachar(',')) then
-            ws%active = max(1, ws%active - 1)
-            call invalidate_mirror()
-            return
-        end if
-        ! Ctrl+Period -> next tab
-        if (ev%ctrl .and. ev%codepoint == iachar('.')) then
-            ws%active = min(ws%n_sess, ws%active + 1)
-            call invalidate_mirror()
             return
         end if
         ! Ctrl+W -> workspace picker (create/switch/close)

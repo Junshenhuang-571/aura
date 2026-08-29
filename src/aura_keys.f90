@@ -24,6 +24,9 @@ module aura_keys
     integer, parameter, public :: KEY_UP=1, KEY_DOWN=2, KEY_LEFT=3, KEY_RIGHT=4
     integer, parameter, public :: KEY_HOME=5, KEY_END=6, KEY_PGUP=7, KEY_PGDN=8
     integer, parameter, public :: KEY_DEL=9,  KEY_INS=10
+    integer, parameter, public :: KEY_F1=11, KEY_F2=12, KEY_F3=13, KEY_F4=14
+    integer, parameter, public :: KEY_F5=15, KEY_F6=16, KEY_F7=17, KEY_F8=18
+    integer, parameter, public :: KEY_F9=19, KEY_F10=20, KEY_F11=21, KEY_F12=22
 
     public :: keys_raw_enter, keys_raw_exit, poll_key, key_to_vt
     public :: con_write_at_f, con_get_size_f, con_refresh_size_f
