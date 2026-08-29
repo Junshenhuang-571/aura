@@ -150,7 +150,14 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
         if (seq[0] == '\x1b') {
             if (tot >= 3 && seq[1] == '[') {
                 out->ev_type = 2;
-                switch (seq[2]) {
+                /* Check for Ctrl modifier: ESC[1;5X means Ctrl+X */
+                int ctrl_mod = (tot >= 4 && seq[2] == '1' && tot >= 5 && seq[3] == ';' && seq[4] == '5');
+                char finalc = 0;
+                /* Find the final character (last letter in the sequence) */
+                for (int ii = tot - 1; ii >= 2; ii--) {
+                    if (seq[ii] >= 'A' && seq[ii] <= 'Z') { finalc = seq[ii]; break; }
+                }
+                switch (finalc) {
                     case 'A': out->ev_key = 1; break;   /* up */
                     case 'B': out->ev_key = 2; break;   /* down */
                     case 'C': out->ev_key = 4; break;   /* right */
@@ -163,6 +170,7 @@ int aura_con_poll_key(int wait_ms, AuraKeyEv* out)
                     default: out->ev_type = 0; break;
                 }
                 if (out->ev_type) {
+                    if (ctrl_mod) out->ctrl = 1;
                     aura_dbg("key: vt path type=%d ch=%u key=%d ctrl=%d shift=%d seq='%s'",
                              out->ev_type, out->ch, out->ev_key, out->ctrl, out->shift, seq);
                     return 1;

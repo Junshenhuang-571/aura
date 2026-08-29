@@ -227,6 +227,20 @@ contains
                         call do_scroll(-10)
                     case (KEY_PGDN)
                         call do_scroll(+10)
+                    case (KEY_RIGHT)
+                        if (ev%ctrl) then
+                            ws%active = min(ws%n_sess, ws%active + 1)
+                            call invalidate_mirror()
+                        else if (.not. ws%scroll_mode) then
+                            call send_key_vt(ev, ws%handle(ws%active))
+                        end if
+                    case (KEY_LEFT)
+                        if (ev%ctrl) then
+                            ws%active = max(1, ws%active - 1)
+                            call invalidate_mirror()
+                        else if (.not. ws%scroll_mode) then
+                            call send_key_vt(ev, ws%handle(ws%active))
+                        end if
                     case default
                         if (.not. ws%scroll_mode) call send_key_vt(ev, ws%handle(ws%active))
                     end select
@@ -278,18 +292,6 @@ contains
                 call spawn_session(cfg%shell_path)
                 call invalidate_mirror()
             end if
-            return
-        end if
-        ! Ctrl+Right -> next tab
-        if (ev%ctrl .and. ev%kind == KEV_SPECIAL .and. ev%special == 4) then
-            ws%active = min(ws%n_sess, ws%active + 1)
-            call invalidate_mirror()
-            return
-        end if
-        ! Ctrl+Left -> previous tab
-        if (ev%ctrl .and. ev%kind == KEV_SPECIAL .and. ev%special == 3) then
-            ws%active = max(1, ws%active - 1)
-            call invalidate_mirror()
             return
         end if
         ! Ctrl+W -> workspace picker (create/switch/close)
