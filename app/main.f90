@@ -200,22 +200,6 @@ contains
 
             ! 3. key event
             if (poll_key(30, ev)) then
-                ! DEBUG: show last key in status bar
-                block
-                    character(len=64) :: kdbg
-                    character(len=16) :: ktype
-                    if (ev%kind == KEV_CHAR) then
-                        ktype = 'CHAR'
-                    else if (ev%kind == KEV_SPECIAL) then
-                        ktype = 'SPEC'
-                    else
-                        ktype = 'RESZ'
-                    end if
-                    write (kdbg, '(A,A,A,I0,A,I0,A,I0,A,I0)') &
-                        trim(ktype), ' cp=', ev%codepoint, ' sp=', ev%special, &
-                        ' ctrl=', merge(1, 0, ev%ctrl), ' shift=', merge(1, 0, ev%shift)
-                    call con_write_at_s(1, con_rows - 1, kdbg, C_DIM, C_BG, .false., .false.)
-                end block
                 select case (ev%kind)
                 case (KEV_RESIZE)
                     if (con_refresh_size_f() /= 0) then
@@ -245,14 +229,14 @@ contains
                     case (KEY_F2)
                         ws%active = min(ws%n_sess, ws%active + 1)
                         call invalidate_mirror()
-                    case (KEY_UP)
+                    case (KEY_LEFT)
                         if (ev%ctrl) then
                             ws%active = max(1, ws%active - 1)
                             call invalidate_mirror()
                         else
                             call send_key_vt(ev, ws%handle(ws%active))
                         end if
-                    case (KEY_DOWN)
+                    case (KEY_RIGHT)
                         if (ev%ctrl) then
                             ws%active = min(ws%n_sess, ws%active + 1)
                             call invalidate_mirror()
@@ -284,8 +268,7 @@ contains
         if (ev%kind == KEV_CHAR) then
             if (ev%ctrl) then
                 if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
-                    .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('r') &
-                    .or. (ev%codepoint >= 1 .and. ev%codepoint <= 9)) r = .true.
+                    .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('r')) r = .true.
             end if
         end if
     end function
@@ -317,12 +300,7 @@ contains
             end if
             return
         end if
-        ! Ctrl+1..Ctrl+9 -> switch to tab 1..9
-        if (ev%ctrl .and. ev%codepoint >= iachar('1') .and. ev%codepoint <= iachar('9')) then
-            ws%active = min(ws%n_sess, int(ev%codepoint - iachar('1') + 1, i4))
-            call invalidate_mirror()
-            return
-        end if
+
         ! Ctrl+W -> workspace picker (create/switch/close)
         if (ev%ctrl .and. ev%codepoint == iachar('w')) then
             call workspace_picker()
