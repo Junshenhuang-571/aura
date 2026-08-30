@@ -175,10 +175,22 @@ contains
     subroutine tui_loop()
         logical :: running
         type(key_event) :: ev
-        integer :: i
+        integer :: i, loopcount
+        integer :: con_cols_chk, con_rows_chk
 
         running = .true.
+        loopcount = 0
+        call con_get_size_f(con_cols_chk, con_rows_chk)
+        open (newunit=i, file='aura_boot.log', status='old', action='read', iostat=i)
+        if (i == 0) then
+            write (i, '(A,I0,A,I0,A,I0)') 'loop: cols=', con_cols_chk, ' rows=', con_rows_chk, ' n_sess=', ws%n_sess
+            close (i)
+        end if
         do while (running)
+            loopcount = loopcount + 1
+            if (mod(loopcount, 100) == 0) then
+                open (newunit=i, file='aura_boot.log', status='old', action='read', iostat=i)
+            end if
             ! 1. pump all sessions in active workspace
             ws => ws_reg%current()
             do i = 1, ws%n_sess
@@ -200,6 +212,22 @@ contains
 
             ! 3. key event
             if (poll_key(30, ev)) then
+                ! DEBUG: log key event to file
+                block
+                    integer :: kf
+                    logical :: kf_exists
+                    inquire (file='aura_keys.log', exist=kf_exists)
+                    if (kf_exists) then
+                        open (newunit=kf, file='aura_keys.log', position='append', action='write')
+                    else
+                        open (newunit=kf, file='aura_keys.log', status='new', action='write')
+                    end if
+                    write (kf, '(A,I0,A,I0,A,I0,A,I0,A,I0)') &
+                        'kind=', ev%kind, ' cp=', ev%codepoint, ' sp=', ev%special, &
+                        ' ctrl=', merge(1, 0, ev%ctrl), ' shift=', merge(1, 0, ev%shift), &
+                        ' alt=', merge(1, 0, ev%alt)
+                    close (kf)
+                end block
                 select case (ev%kind)
                 case (KEV_RESIZE)
                     if (con_refresh_size_f() /= 0) then
