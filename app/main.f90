@@ -195,26 +195,14 @@ contains
         dbg_once = .false.
         call con_get_size_f(con_cols_chk, con_rows_chk)
         cfg_dir = config_dir_path()
-        open (newunit=i, file='aura_boot.log', status='old', action='read', iostat=i)
+        open (newunit=i, file='aura_boot.log', status='replace', action='write', iostat=i)
         if (i == 0) then
-            write (i, '(A,I0,A,I0,A,I0)') 'loop: cols=', con_cols_chk, ' rows=', con_rows_chk, ' n_sess=', ws%n_sess
+            write (i, '(A,A)') 'config_dir_path()="', trim(cfg_dir), '"'
+            write (i, '(A,I0)') 'boot: ws_reg%n=', ws_reg%n
+            write (i, '(A,I0)') 'boot: current ws n_sess=', ws%n_sess, ' active=', ws%active
             close (i)
         end if
         do while (running)
-            loopcount = loopcount + 1
-            if (.not. dbg_once) then
-                dbg_once = .true.
-                open (newunit=i, file='aura_boot.log', status='old', action='read', iostat=i)
-                if (i /= 0) then
-                    open (newunit=i, file='aura_boot.log', status='replace', action='write')
-                    write (i, '(A)') '=== session restart ==='
-                    write (i, '(A,A)') 'config_dir_path()="' // trim(cfg_dir) // '"'
-                    write (i, '(A,I0)') 'boot: ws_reg%n=', ws_reg%n
-                    write (i, '(A,I0)') 'boot: current ws n_sess=', ws%n_sess, ' active=', ws%active
-                    close (i)
-                end if
-            end if
-            ! 1. pump all sessions in active workspace
             ws => ws_reg%current()
             do i = 1, ws%n_sess
                 if (ws%sess(i)%alive) call drain_session(ws%sess(i), ws%handle(i), 5)
