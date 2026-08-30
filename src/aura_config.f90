@@ -31,6 +31,10 @@ contains
         character(len=:), allocatable :: p
         character(len=512) :: home, appdata
         integer :: ios
+        logical :: is_windows
+        is_windows = .false.
+        call get_environment_variable('OS', home, status=ios)
+        if (ios == 0 .and. index(home, 'Windows') > 0) is_windows = .true.
         call get_environment_variable('HOME', home, status=ios)
         if (ios /= 0 .or. len_trim(home) == 0) then
             call get_environment_variable('APPDATA', appdata, status=ios)
@@ -40,10 +44,10 @@ contains
                 p = '.aura'
             end if
         else
-            if (index(get_environment('OS'), 'Windows') > 0) then
-                p = trim(home)//'/.config/aura'
+            if (is_windows) then
+                p = trim(home) // '\.config\aura'
             else
-                p = trim(home)//'/.config/aura'
+                p = trim(home) // '/.config/aura'
             end if
         end if
     end function
