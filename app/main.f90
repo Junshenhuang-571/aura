@@ -63,6 +63,7 @@ program aura_main
     block
         integer :: u
         integer(i4) :: idx
+        integer :: di
         open (newunit=u, file='aura_boot.log', status='replace', action='write')
         write (u, '(A)') 'boot: start'
         flush (u)
@@ -82,6 +83,15 @@ program aura_main
         call spawn_session(cfg%shell_path)
         write (u, '(A,I0)') 'boot: spawned sessions=', ws%n_sess
         flush (u)
+        ! DEBUG: show workspace structure
+        write (u, '(A,I0)') 'boot: ws_reg%n=', ws_reg%n
+        do di = 1, ws_reg%n
+            write (u, '(A,I0,A,A)') 'boot: ws(', di, ') name='
+            write (u, '(A)') trim(ws_reg%items(di)%name)
+            write (u, '(A,I0)') 'boot:   n_sess=', ws_reg%items(di)%n_sess
+            write (u, '(A,I0)') 'boot:   active=', ws_reg%items(di)%active
+        end do
+        ws => ws_reg%current()
 
         if (ws%n_sess == 0) then
             block
