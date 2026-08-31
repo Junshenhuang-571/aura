@@ -207,8 +207,13 @@ contains
             do i = 1, ws%n_sess
                 if (ws%sess(i)%alive) call drain_session(ws%sess(i), ws%handle(i), 5)
             end do
-            ws%active = max(1, min(ws%n_sess, ws%n_sess))
-            if (ws%n_sess > 0) ws%active = min(ws%active, ws%n_sess)
+            ! clamp active to valid range; do NOT reset it — tab switching
+            ! must persist across loop iterations
+            if (ws%n_sess == 0) then
+                ws%active = 1
+            else
+                ws%active = max(1, min(ws%active, ws%n_sess))
+            end if
 
             call con_get_size_f(con_cols, con_rows)
 
