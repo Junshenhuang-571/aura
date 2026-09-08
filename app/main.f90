@@ -19,6 +19,7 @@ program aura_main
     use aura_config
     use aura_theme
     use aura_workspace
+    use aura_workbench
     implicit none
 
     integer, parameter :: MAX_SESS = 8
@@ -54,6 +55,9 @@ program aura_main
                 call cfg%load()
                 call ai_init(cfg)
                 print *, trim(ai_query(trim(q), '', '.'))
+                stop 0
+            case ('--workbench')
+                call run_workbench_command()
                 stop 0
             end select
         end if
@@ -142,6 +146,65 @@ program aura_main
     print *, 'Aura closed.'
 
 contains
+
+    ! Headless adapter used by the GUI foundation.  The GUI can display the
+    ! same manifest and invoke these stages without embedding a compiler,
+    ! MPI implementation, or scheduler API.
+    subroutine run_workbench_command()
+        type(wb_manifest) :: manifest
+        logical :: ok
+        character(len=:), allocatable :: message, cmd
+        character(len=2048) :: path, action, template, run_id
+        integer :: exit_code
+        type(wb_run_record) :: record
+        logical :: record_ok
+        path = 'aura-workbench.toml'
+        action = 'summary'
+        template = ''
+        run_id = 'cli-run'
+        if (command_argument_count() >= 2) call get_command_argument(2, path)
+        if (command_argument_count() >= 3) call get_command_argument(3, action)
+        if (command_argument_count() >= 4) call get_command_argument(4, template)
+        if (command_argument_count() >= 5) call get_command_argument(5, run_id)
+        call manifest%load(trim(path), ok, message)
+        if (.not. ok) then
+            print '(A)', 'workbench: '//trim(message)
+            return
+        end if
+        select case (trim(action))
+        case ('summary')
+            print '(A)', 'Project: '//trim(manifest%name)
+            print '(A)', 'Template: '//trim(manifest%default_template)
+            print '(A)', 'Build: '//trim(manifest%command('build', template))
+            print '(A)', 'Run: '//trim(manifest%command('run', template))
+            print '(A,I0)', 'Sweep points: ', manifest%sweep_count()
+            print '(A)', 'Tracking: '//trim(manifest%tracking_directory)
+        case ('build', 'run', 'test', 'visualize', 'browse', 'monitor-results')
+            if (trim(action) == 'run') then
+                cmd = manifest%command('run', template)
+                call manifest%start_run(trim(run_id), cmd, record, record_ok)
+            end if
+            if (trim(action) == 'monitor-results') then
+                call manifest%execute('monitor', template, exit_code, cmd)
+            else
+                call manifest%execute(trim(action), template, exit_code, cmd)
+            end if
+            if (trim(action) == 'run') call manifest%finish_run(trim(run_id), exit_code, ok=record_ok)
+            print '(A)', trim(cmd)
+            if (exit_code /= 0) print '(A,I0)', 'workbench exit code: ', exit_code
+        case ('monitor')
+            call manifest%read_run(trim(template), record, ok)
+            if (ok) then
+                print '(A)', 'Run '//trim(record%id)//': '//trim(record%state)
+                print '(A,I0)', 'Exit code: ', record%exit_code
+                if (len_trim(record%result_path) > 0) print '(A)', 'Result: '//trim(record%result_path)
+            else
+                print '(A)', 'Run status not found.'
+            end if
+        case default
+            print '(A)', 'Usage: aura --workbench [manifest] [summary|build|run|test|visualize|browse|monitor] [template|run-id]'
+        end select
+    end subroutine
 
     ! Legacy line-based mode kept for debugging / non-TTY environments.
     subroutine run_legacy_cli()

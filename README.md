@@ -18,6 +18,7 @@ offline local AI assistant, and near-zero external runtime dependencies.
 | SSH workspaces (system `ssh`) | ✅ saved remote workspace targets |
 | Speech-to-text | 🔌 external recorder + `transcribe-cli` adapter |
 | GTK3 GUI (gtk-fortran) | 🧩 skeleton in `src/aura_gui.f90` (see below) |
+| Physics workbench manifest | ✅ templates, MPI/OpenMP, SLURM/local, sweeps, run tracking, result adapters |
 | fpm build | `fpm.toml` included; direct gfortran build also provided |
 
 ## Quick start
@@ -38,6 +39,56 @@ dependencies at runtime.
 
 `fpm.toml` is set up for `fpm build && fpm run`. If you don't have fpm,
 `build.sh` compiles the same sources directly.
+
+## Computational physics workbench
+
+The repository includes `aura-workbench.toml`, a dependency-free project
+manifest intended to be the first GUI-facing model for solver projects.  It
+keeps project metadata, Fortran templates, compiler flags, MPI/OpenMP choices,
+external build/run/test commands, local or SLURM execution, parameter sweeps,
+run tracking, and result adapters for visualization, convergence checks, and
+HDF5/NetCDF browsing in one inspectable file. Aura does **not** embed GTK,
+compilers, MPI, SLURM, HDF5/NetCDF, or a plotting library; commands are
+adapters to tools already installed on the host.
+
+The same manifest can be inspected or executed from the CLI while a future GUI
+uses the module API (`src/aura_workbench.f90`) to populate controls:
+
+```sh
+./build/aura --workbench aura-workbench.toml summary
+./build/aura --workbench aura-workbench.toml build
+./build/aura --workbench aura-workbench.toml run
+./build/aura --workbench aura-workbench.toml test
+./build/aura --workbench aura-workbench.toml monitor run-001
+```
+
+The manifest uses small TOML sections (`project`, `toolchain`, `mpi`,
+`openmp`, `scheduler`, `commands`, `tracking`, `results`, `templates.*`, and
+`sweep.*`). The `[results]` section can point to Python/matplotlib, ParaView,
+HDF5, or NetCDF commands. `scheduler.kind = "slurm"` wraps the run command in
+`sbatch`; `local` runs it directly.
+Sweep values form a Cartesian product and are exposed to the GUI as named
+points.  `{mpi_prefix}`, `{omp_prefix}`, `{source_dir}`, `{main}`, and other
+documented substitutions are expanded before an external command is run.
+Run status is recorded under `tracking.directory/<run-id>/` as
+`status.toml`, allowing a monitor panel to remain useful even when the solver
+is not running.
+
+### Workbench workflow and limitations
+
+1. Copy the sample manifest and select a template/compiler for the solver.
+2. Validate the command with `summary`, then build and run locally.
+3. Enable MPI/OpenMP or SLURM only after checking the resulting command.
+4. Give each sweep point a run ID and write solver output into its tracked
+   directory for later visualization.
+
+This is a foundation, not a job database: the current CLI does not launch
+multiple sweep points automatically, stream scheduler logs, or parse result
+formats natively. The GTK module is still a host-integration skeleton, so an
+embedded plot canvas and native HDF5/NetCDF browser remain the next GUI
+milestone; the `[results]` adapters provide a portable fallback today. The
+parser intentionally supports the manifest subset above rather than all TOML.
+MPI, OpenMP, SLURM, and GUI availability depend on external installations.
 
 ## Usage
 
@@ -124,6 +175,7 @@ src/aura_llm.f90        AI interface; prefers native backend, falls back to
                         offline rule-based 'aura-assist'
 csrc/aura_llm_stub.c    no-op native backend (replace to plug llm.f90)
 src/aura_gui.f90        gtk-fortran GUI skeleton (notebook tabs + text view plan)
+src/aura_workbench.f90  manifest, command adapters, sweeps, run tracking
 test/                   unit tests + e2e test
 ```
 

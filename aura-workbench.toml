@@ -1,0 +1,66 @@
+# Aura computational-physics workbench manifest (schema version 1).
+# Commands are external adapters: replace them with the compiler, MPI
+# launcher, scheduler, or post-processing tools installed on your machine.
+
+[project]
+version = "1"
+name = "ising-demo"
+root = "."
+default-template = "gnu"
+
+[toolchain]
+compiler = "gfortran"
+flags = "-std=f2018 -O2"
+
+[mpi]
+enabled = false
+launcher = "mpiexec"
+ranks = 1
+
+[openmp]
+enabled = false
+threads = 1
+flags = "-fopenmp"
+
+[scheduler]
+kind = "local" # local or slurm
+command = "sbatch"
+partition = ""
+account = ""
+time = ""
+cpus-per-task = 1
+
+[commands]
+# Supported substitutions: {name}, {root}, {compiler}, {flags},
+# {openmp_flags}, {omp_threads}, {mpi_prefix}, {source_dir}, {main}.
+build = "{compiler} {flags} {openmp_flags} {source_dir}/*.f90 -o build/{name}"
+run = "{mpi_prefix}{omp_prefix}./build/{name}"
+test = ""
+
+[tracking]
+directory = ".aura/runs"
+monitor-command = ""
+
+[results]
+# Use Python/matplotlib, ParaView, or a project-specific tool here.
+# Supported substitutions: {result_format}, {tracking_directory}, {name}.
+format = "csv"
+visualize-command = ""
+browse-command = ""
+convergence-command = ""
+
+[templates.gnu]
+source-dir = "src"
+main = "main.f90"
+dependencies = ""
+build = ""
+run = ""
+test = ""
+
+# A sweep is a Cartesian product.  A solver can read these values from its
+# generated input or the GUI can substitute {beta}, {lattice}, etc. itself.
+[sweep.beta]
+values = "0.1,0.2,0.4"
+
+[sweep.lattice]
+values = "32,64"
