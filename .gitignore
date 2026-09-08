@@ -17,4 +17,4 @@ models/
 *.mod
 
 # rbitr/llm.f90 clone (vendored reference source)
-csrc/llm_f90_src/
+# The native LLM compatibility module is source, not a generated artifact.
