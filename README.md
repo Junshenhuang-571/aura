@@ -15,6 +15,8 @@ offline local AI assistant, and near-zero external runtime dependencies.
 | Local AI assistant (`aura-assist`, fully offline) | ✅ done |
 | Native LLM inference hook (llm.f90 / llama.cpp slot) | 🔌 interface ready, stub linked |
 | JSON config (`~/.config/aura/config.json`) | ✅ done (json-fortran-compatible format) |
+| SSH workspaces (system `ssh`) | ✅ saved remote workspace targets |
+| Speech-to-text | 🔌 external recorder + `transcribe-cli` adapter |
 | GTK3 GUI (gtk-fortran) | 🧩 skeleton in `src/aura_gui.f90` (see below) |
 | fpm build | `fpm.toml` included; direct gfortran build also provided |
 
@@ -45,6 +47,38 @@ dependencies at runtime.
 - `/exit` quits.
 - One-shot mode: `aura --ask "check disk space"`.
 
+### SSH workspaces
+
+Aura can persist remote workspaces and launches the platform's `ssh` command
+inside the same PTY/session layer. In the workspace picker, enter a remote
+workspace as:
+
+```text
+name|user@host|22|/path/to/project
+```
+
+The workspace is saved in `workspaces.json`, reconnects using your normal SSH
+configuration/agent, and sends `cd` to the requested remote directory after
+connection. Aura does not handle passwords or private keys itself.
+
+### Speech-to-text adapter
+
+Speech input is intentionally external and local. Configure a recorder and a
+transcriber command in `config.json`; both use `{wav}` as the output/input
+placeholder:
+
+```json
+{
+  "stt_record_command": "ffmpeg -y -f dshow -i audio=\"Microphone\" -t 8 -ar 16000 -ac 1 {wav}",
+  "stt_transcribe_command": "transcribe-cli -m models/whisper-small.gguf {wav}"
+}
+```
+
+Build `handy-computer/transcribe.cpp` and download a compatible GGUF model
+before using `Ctrl+Shift+V`. Aura records to `aura_voice.wav`, captures the
+adapter's stdout, and opens the transcript in the AI drawer for review before
+submission. The transcript is never sent directly to the shell.
+
 ### TUI design language
 
 Aura uses a focused, terminal-native layout for computational physics work:
@@ -61,7 +95,8 @@ Aura uses a focused, terminal-native layout for computational physics work:
   shell input remains untouched while the assistant drawer is closed.
 
 Key controls: `Ctrl+T` new shell tab, `Ctrl+R` switch workspace, `Ctrl+W`
-workspace picker, `Ctrl+Shift+A` assistant, and `PgUp/PgDn` scrollback.
+workspace picker, `Ctrl+Shift+A` assistant, `Ctrl+Shift+V` voice capture,
+and `PgUp/PgDn` scrollback.
 
 ## Configuration
 

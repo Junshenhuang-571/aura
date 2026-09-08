@@ -313,6 +313,7 @@ contains
             if (ev%ctrl) then
                 if (ev%codepoint == iachar('a') .or. ev%codepoint == iachar('t') &
                     .or. ev%codepoint == iachar('w') .or. ev%codepoint == iachar('r')) r = .true.
+                if (ev%codepoint == iachar('v') .and. ev%shift) r = .true.
             end if
         end if
     end function
@@ -320,11 +321,18 @@ contains
     logical function handle_reserved(ev) result(keep_running)
         type(key_event), intent(in) :: ev
         integer(i4) :: idx
+        character(len=:), allocatable :: transcript
         keep_running = .true.
 
         ! Ctrl+Shift+A -> AI drawer (the prompt is also the voice-input target)
         if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('a')) then
             call ai_drawer()
+            return
+        end if
+        ! Ctrl+Shift+V records/transcribes through the configured external adapter.
+        if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('v')) then
+            transcript = capture_voice_text()
+            if (len_trim(transcript) > 0) call ai_drawer(transcript)
             return
         end if
         ! Ctrl+R -> cycle workspace
@@ -381,6 +389,7 @@ contains
     subroutine spawn_session(shellcmd)
         character(len=*), intent(in) :: shellcmd
         integer :: qc, qr
+        character(len=:), allocatable :: command
         if (ws%n_sess >= MAX_SESS) return
         call con_get_size_f(qc, qr)
         if (qc < 20) qc = 80
@@ -388,10 +397,23 @@ contains
         GRID_COLS = qc
         GRID_ROWS = qr
         call init_blank(ws%sess(ws%n_sess + 1))
-        if (pty_spawn(shellcmd, GRID_COLS, GRID_ROWS, ws%handle(ws%n_sess + 1)) /= 0) return
+        if (len_trim(ws%remote_target) > 0) then
+            command = 'ssh -p '//int_to_string(ws%remote_port)//' '//trim(ws%remote_target)
+        else
+            command = trim(shellcmd)
+        end if
+        if (pty_spawn(command, GRID_COLS, GRID_ROWS, ws%handle(ws%n_sess + 1)) /= 0) return
         ws%n_sess = ws%n_sess + 1
         ws%sess(ws%n_sess)%alive = .true.
-        write (ws%titles(ws%n_sess), '(A,I0)') 'shell', ws%n_sess
+        if (len_trim(ws%remote_target) > 0) then
+            write (ws%titles(ws%n_sess), '(A,I0)') 'ssh', ws%n_sess
+            if (len_trim(ws%cwd) > 0 .and. trim(ws%cwd) /= '.') then
+                rc_dummy = pty_write_text(ws%handle(ws%n_sess), 'cd "'//trim(ws%cwd)//'"')
+                rc_dummy = pty_write_bytes(ws%handle(ws%n_sess), (/ achar(13) /), 1)
+            end if
+        else
+            write (ws%titles(ws%n_sess), '(A,I0)') 'shell', ws%n_sess
+        end if
         ws%active = ws%n_sess
     end subroutine
 
@@ -473,7 +495,7 @@ contains
             else if (aev%codepoint == 13 .or. aev%codepoint == 10) then
                 done = .true.
                 if (qlen > 0) then
-                    call reg_add(ws_reg, trim(qlin(:qlen)), '.', i)
+                    call add_workspace_spec(trim(qlin(:qlen)), i)
                     ws_reg%active = int(i, i4)
                     ws => ws_reg%current()
                     if (ws%n_sess == 0) call spawn_session(cfg%shell_path)
@@ -490,7 +512,8 @@ contains
     end subroutine
 
     ! ---- AI drawer ----
-    subroutine ai_drawer()
+    subroutine ai_drawer(seed)
+        character(len=*), intent(in), optional :: seed
         character(len=1024) :: qlin
         character(len=:), allocatable :: answer, cmdline
         integer :: drawer_top, ln, qlen
@@ -507,6 +530,10 @@ contains
         call con_write_at_s(con_cols - 31, drawer_top, ' Voice-ready prompt  |  Esc close', C_DIM, C_BG, .false., .false.)
         qlin = ''
         qlen = 0
+        if (present(seed)) then
+            qlen = min(len(qlin), len_trim(seed))
+            if (qlen > 0) qlin(:qlen) = seed(:qlen)
+        end if
         done = .false.
         do while (.not. done)
             call con_write_at_s(3, drawer_top + 2, '> '//qlin(:qlen)//'_', C_ACCENT2, C_BG, .false., .false.)
@@ -543,6 +570,82 @@ contains
         call clear_drawer(drawer_top)
         call invalidate_mirror()
     end subroutine
+
+    subroutine add_workspace_spec(spec, idx)
+        character(len=*), intent(in) :: spec
+        integer, intent(out) :: idx
+        integer :: p1, p2, p3, port, ios
+        character(len=256) :: name, target, cwd, port_text
+        name = ''; target = ''; cwd = ''; port_text = ''
+        p1 = index(spec, '|')
+        p2 = 0; p3 = 0
+        if (p1 > 0) p2 = index(spec(p1 + 1:), '|') + p1
+        if (p2 > p1) p3 = index(spec(p2 + 1:), '|') + p2
+        if (p1 > 1 .and. p2 > p1 .and. p3 > p2) then
+            name = spec(:p1 - 1)
+            target = spec(p1 + 1:p2 - 1)
+            port_text = spec(p2 + 1:p3 - 1)
+            cwd = spec(p3 + 1:)
+            read (port_text, *, iostat=ios) port
+            if (ios /= 0) port = 22
+            call reg_add_remote(ws_reg, trim(name), trim(target), trim(cwd), port, idx)
+        else
+            call reg_add(ws_reg, trim(spec), '.', idx)
+        end if
+        if (idx > 0) then
+            ws_reg%active = int(idx, i4)
+            ws => ws_reg%current()
+            if (ws%n_sess == 0) call spawn_session(cfg%shell_path)
+        end if
+    end subroutine
+
+    function capture_voice_text() result(transcript)
+        character(len=:), allocatable :: transcript
+        character(len=1024) :: record_cmd, transcribe_cmd, wav_path, txt_path
+        character(len=4096) :: line
+        integer :: u, ios, exitstat
+        transcript = ''
+        if (len_trim(cfg%stt_record_command) == 0 .or. len_trim(cfg%stt_transcribe_command) == 0) then
+            call con_write_at_s(2, max(1, con_rows - 4), &
+                'Voice adapter not configured. Set stt_record_command and stt_transcribe_command.', &
+                C_WARN, C_BG, .false., .false.)
+            return
+        end if
+        wav_path = 'aura_voice.wav'
+        txt_path = 'aura_voice.txt'
+        record_cmd = replace_token(cfg%stt_record_command, '{wav}', wav_path)
+        transcribe_cmd = replace_token(cfg%stt_transcribe_command, '{wav}', wav_path)
+        call execute_command_line(trim(record_cmd), wait=.true., exitstat=exitstat)
+        if (exitstat /= 0) return
+        call execute_command_line(trim(transcribe_cmd)//' > "'//trim(txt_path)//'"', &
+                                  wait=.true., exitstat=exitstat)
+        if (exitstat /= 0) return
+        open (newunit=u, file=trim(txt_path), status='old', action='read', iostat=ios)
+        if (ios /= 0) return
+        do
+            read (u, '(A)', iostat=ios) line
+            if (ios /= 0) exit
+            if (len_trim(transcript) > 0) transcript = transcript//' '
+            transcript = transcript//trim(line)
+        end do
+        close (u)
+    end function
+
+    function replace_token(command, token, value) result(out)
+        character(len=*), intent(in) :: command, token, value
+        character(len=:), allocatable :: out
+        integer :: p
+        out = command
+        p = index(out, token)
+        if (p > 0) out = out(:p - 1)//value//out(p + len(token):)
+    end function
+
+    function int_to_string(value) result(out)
+        integer, intent(in) :: value
+        character(len=16) :: out
+        write (out, '(I0)') value
+        out = adjustl(out)
+    end function
 
     subroutine clear_drawer(top_row)
         integer, intent(in) :: top_row

@@ -17,6 +17,8 @@ module aura_config
         character(len=:), allocatable :: model_format    ! "ak" | "gguf"
         character(len=:), allocatable :: ollama_host     ! e.g. 127.0.0.1
         character(len=:), allocatable :: ollama_model    ! e.g. gpt-oss:20b
+        character(len=:), allocatable :: stt_record_command ! optional recorder; use {wav}
+        character(len=:), allocatable :: stt_transcribe_command ! adapter; use {wav}
         integer(i4) :: history_lines = 1000
     contains
         procedure :: load, save
@@ -83,6 +85,8 @@ contains
         self%model_format = 'ak'
         self%ollama_host = '127.0.0.1'
         self%ollama_model = 'gpt-oss:20b'
+        self%stt_record_command = ''
+        self%stt_transcribe_command = 'transcribe-cli -m models/whisper-small.gguf {wav}'
         self%history_lines = 1000_i4
     end subroutine
 
@@ -157,6 +161,8 @@ contains
             case ('format'); self%model_format = trim(val)
             case ('ollama_host');self%ollama_host = trim(val)
             case ('ollama_model');self%ollama_model = trim(val)
+            case ('stt_record_command');self%stt_record_command = trim(val)
+            case ('stt_transcribe_command');self%stt_transcribe_command = trim(val)
             case ('history_lines')
                 read (val, *, iostat=ios) self%history_lines
                 if (ios /= 0) self%history_lines = 1000_i4
@@ -192,6 +198,8 @@ contains
         write (u, '(A)') '  "format": "'//json_escape(self%model_format)//'",'
         write (u, '(A)') '  "ollama_host": "'//json_escape(self%ollama_host)//'",'
         write (u, '(A)') '  "ollama_model": "'//json_escape(self%ollama_model)//'",'
+        write (u, '(A)') '  "stt_record_command": "'//json_escape(self%stt_record_command)//'",'
+        write (u, '(A)') '  "stt_transcribe_command": "'//json_escape(self%stt_transcribe_command)//'",'
         write (u, '(A,I0,A)') '  "history_lines": ', self%history_lines, ''
         write (u, '(A)') '}'
         close (u)

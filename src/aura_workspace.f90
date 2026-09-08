@@ -32,6 +32,8 @@ module aura_workspace
     type, public :: workspace
         character(len=:), allocatable :: name
         character(len=:), allocatable :: cwd
+        character(len=:), allocatable :: remote_target
+        integer(i4) :: remote_port = 22
         type(ai_context) :: ai
         character(len=512) :: tab_cwds(MAX_TABS)
         integer(i4) :: n_tabs = 0
@@ -62,7 +64,7 @@ module aura_workspace
     end type
 
     public :: default_workspace
-    public :: reg_add
+    public :: reg_add, reg_add_remote
 contains
 
     subroutine add_message(self, role, content)
@@ -79,6 +81,17 @@ contains
         self%n_msgs = self%n_msgs + 1
         self%msgs(self%n_msgs)%role = role
         self%msgs(self%n_msgs)%content = content
+    end subroutine
+
+    subroutine reg_add_remote(reg, name, target, cwd, port, idx)
+        type(workspace_registry), intent(inout) :: reg
+        character(len=*), intent(in) :: name, target, cwd
+        integer, intent(in) :: port
+        integer(i4), intent(out) :: idx
+        call reg_add(reg, name, cwd, idx)
+        if (idx < 1) return
+        reg%items(idx)%remote_target = target
+        reg%items(idx)%remote_port = max(1, port)
     end subroutine
 
     subroutine clear_history(self)
@@ -122,6 +135,8 @@ contains
         ai_json = self%ai%ctx_to_json()
         s = '{' // new_line('a') // '  "name": "' // json_escape(self%name) // '",' // &
             new_line('a') // '  "cwd": "' // json_escape(self%cwd) // '",' // &
+            new_line('a') // '  "remote_target": "' // json_escape(self%remote_target) // '",' // &
+            new_line('a') // '  "remote_port": ' // int2str(self%remote_port) // ',' // &
             new_line('a') // '  "active_tab": ' // int2str(self%active_tab) // ',' // &
             new_line('a') // '  "tabs": ['
         do i = 1, self%n_tabs
@@ -137,6 +152,8 @@ contains
         character(len=*), intent(in) :: text
         self%name = extract_json_string(text, 'name')
         self%cwd = extract_json_string(text, 'cwd')
+        self%remote_target = extract_json_string(text, 'remote_target')
+        self%remote_port = extract_json_integer(text, 'remote_port', 22)
         self%n_tabs = 0
         self%active_tab = 1
         call self%ai%ctx_from_json(text)
@@ -155,6 +172,8 @@ contains
         idx = reg%n
         reg%items(idx)%name = name
         reg%items(idx)%cwd = cwd
+        reg%items(idx)%remote_target = ''
+        reg%items(idx)%remote_port = 22
         reg%items(idx)%ai%system_prompt = default_system_prompt(name, cwd)
         reg%items(idx)%n_tabs = 0
         reg%items(idx)%active_tab = 1
@@ -325,6 +344,32 @@ contains
         val = json_unescape(text(p:p + q - 2))
     end function
 
+    function extract_json_integer(text, key, fallback) result(value)
+        character(len=*), intent(in) :: text, key
+        integer, intent(in) :: fallback
+        integer :: value, p, start, q, ios
+        character(len=32) :: digits
+        value = fallback
+        p = index(text, '"' // trim(key) // '"')
+        if (p == 0) return
+        start = p
+        p = index(text(start:), ':')
+        if (p == 0) return
+        p = start + p
+        do while (p <= len(text) .and. text(p:p) == ' ')
+            p = p + 1
+        end do
+        q = p
+        do while (q <= len(text) .and. text(q:q) >= '0' .and. text(q:q) <= '9')
+            q = q + 1
+        end do
+        if (q <= p) return
+        digits = ''
+        digits(:min(len(digits), q - p)) = text(p:p + min(len(digits), q - p) - 1)
+        read (digits, *, iostat=ios) value
+        if (ios /= 0) value = fallback
+    end function
+
     subroutine ensure_dir(d)
         character(len=*), intent(in) :: d
         call execute_command_line('mkdir -p "' // trim(d) // '"', wait=.false.)
@@ -352,7 +397,7 @@ contains
 
     function default_workspace() result(w)
         type(workspace) :: w
-        w%name = 'default'; w%cwd = '.'
+        w%name = 'default'; w%cwd = '.'; w%remote_target = ''; w%remote_port = 22
         w%ai%system_prompt = default_system_prompt('default', '.')
         w%n_tabs = 0; w%active_tab = 1
     end function
