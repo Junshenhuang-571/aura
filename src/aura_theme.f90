@@ -1,4 +1,4 @@
-! aura_theme.f90 — cohesive dark palette + ANSI/SGR + box-drawing helpers.
+! aura_theme.f90 — cohesive computational-physics palette + ANSI/SGR helpers.
 ! Pure, dependency-free. Other modules `use` this for color.
 ! ANSI 256 colors. Aura's look: near-black bg, light fg, purple + teal accents.
 module aura_theme
@@ -9,17 +9,19 @@ module aura_theme
               sgr, sgr_reset, con_s, &
               b_h, b_v, b_tl, b_tr, b_bl, b_br, b_ml, b_mr, b_dot, b_arrow
 
-    ! palette (ANSI 256)
-    integer, parameter :: C_BG     = 234   ! #1c1c1c near-black
-    integer, parameter :: C_FG     = 252   ! #d0d0d0 light grey
-    integer, parameter :: C_DIM    = 244   ! #808080 muted
-    integer, parameter :: C_BORDER = 239   ! #4e4e4e subtle lines
-    integer, parameter :: C_ACCENT = 141  ! #af87ff purple
-    integer, parameter :: C_ACCENT2= 43   ! #00d7af teal
-    integer, parameter :: C_SUCCESS= 78   ! #5fff5f green
-    integer, parameter :: C_WARN   = 214  ! #ffaf00 amber
-    integer, parameter :: C_ERR    = 203  ! #ff5f5f red
-    integer, parameter :: C_TITLE  = 147  ! #afffd7 mint
+    ! Palette (ANSI 256): midnight canvas, ice-blue data accents, and
+    ! violet for AI controls. The contrast is intentionally calm for long
+    ! simulation and debugging sessions.
+    integer, parameter :: C_BG     = 17    ! #00005f midnight navy
+    integer, parameter :: C_FG     = 255   ! #eeeeee primary text
+    integer, parameter :: C_DIM    = 246   ! #949494 secondary text
+    integer, parameter :: C_BORDER = 24   ! #005f87 panel rules
+    integer, parameter :: C_ACCENT = 81   ! #5fd7ff data cyan
+    integer, parameter :: C_ACCENT2= 141  ! #af87ff AI violet
+    integer, parameter :: C_SUCCESS= 78   ! #5fff5f converged green
+    integer, parameter :: C_WARN   = 214  ! #ffaf00 warning amber
+    integer, parameter :: C_ERR    = 203  ! #ff5f5f error red
+    integer, parameter :: C_TITLE  = 159  ! #afffff bright cyan
 
 contains
 

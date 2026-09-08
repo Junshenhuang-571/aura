@@ -322,7 +322,7 @@ contains
         integer(i4) :: idx
         keep_running = .true.
 
-        ! Ctrl+A -> AI drawer
+        ! Ctrl+Shift+A -> AI drawer (the prompt is also the voice-input target)
         if (ev%ctrl .and. ev%shift .and. ev%codepoint == iachar('a')) then
             call ai_drawer()
             return
@@ -503,13 +503,13 @@ contains
 
         drawer_top = max(1, con_rows - 8)
         call draw_hline(drawer_top, con_cols)
-        call con_write_at_s(2, drawer_top, b_dot()//' Aura AI', C_ACCENT, C_BG, .true., .false.)
-        call con_write_at_s(con_cols - 18, drawer_top, ' Ctrl+A to close', C_DIM, C_BG, .false., .false.)
+        call con_write_at_s(2, drawer_top, ' AURA AI  /  COMPUTATIONAL ASSIST', C_ACCENT, C_BG, .true., .false.)
+        call con_write_at_s(con_cols - 31, drawer_top, ' Voice-ready prompt  |  Esc close', C_DIM, C_BG, .false., .false.)
         qlin = ''
         qlen = 0
         done = .false.
         do while (.not. done)
-            call con_write_at_s(3, drawer_top + 2, b_arrow()//' '//qlin(:qlen)//'_', C_ACCENT2, C_BG, .false., .false.)
+            call con_write_at_s(3, drawer_top + 2, '> '//qlin(:qlen)//'_', C_ACCENT2, C_BG, .false., .false.)
             if (.not. poll_key(-1, aev)) cycle
             if (aev%kind /= KEV_CHAR) cycle
             if (aev%codepoint == 27) then

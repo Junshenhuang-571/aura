@@ -45,6 +45,24 @@ dependencies at runtime.
 - `/exit` quits.
 - One-shot mode: `aura --ask "check disk space"`.
 
+### TUI design language
+
+Aura uses a focused, terminal-native layout for computational physics work:
+
+- **Midnight canvas + ice-blue data accents** keep long solver sessions easy on
+  the eyes while making active controls obvious.
+- The bottom status rail identifies the current workspace as
+  `FORTRAN PHYSICS`, keeps shell tabs visible, and reports live versus
+  scrollback mode without covering simulation output.
+- `Ctrl+Shift+A` opens the **Computational Assist** drawer. Its prompt is the
+  dedicated target for typed or speech-to-text input, so transcribed questions
+  can be reviewed before they are sent to the model.
+- The status rail exposes `VOICE READY` as a persistent input affordance;
+  shell input remains untouched while the assistant drawer is closed.
+
+Key controls: `Ctrl+T` new shell tab, `Ctrl+R` switch workspace, `Ctrl+W`
+workspace picker, `Ctrl+Shift+A` assistant, and `PgUp/PgDn` scrollback.
+
 ## Configuration
 
 `~/.config/aura/config.json` (auto-created on first `--config`):

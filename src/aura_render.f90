@@ -185,21 +185,26 @@ contains
         slen = 3 + n
     end function
 
-    ! Status line at the bottom: styled session tab bar + AI hint.
+    ! Status line at the bottom: product identity, workspace tabs, and
+    ! lightweight controls. Keep it useful without taking terminal space.
     subroutine render_status_line(reg, cols)
         type(workspace_registry), intent(inout) :: reg
         integer, intent(in) :: cols
         type(workspace), pointer :: ws
         integer :: i, pos, rr
         character(len=16) :: num
+        character(len=32) :: mode_label
+        character(len=64) :: right_label
         rr = rows_for_status()
         ws => reg%current()
         ! clear the whole strip first
         call con_write_at_s(0, rr, repeat(' ', min(cols, 500)), C_BG, C_BG, .false., .false.)
         pos = 1
-        ! brand mark + workspace name
-        call con_write_at_s(pos, rr, b_dot()//' '//trim(ws%name), C_ACCENT, C_BG, .true., .false.)
-        pos = pos + 2 + len_trim(ws%name) + 2
+        ! Product identity + active scientific workspace.
+        call con_write_at_s(pos, rr, ' AURA  /  '//trim(ws%name), C_TITLE, C_BG, .true., .false.)
+        pos = pos + 12 + len_trim(ws%name)
+        call con_write_at_s(pos, rr, '  FORTRAN PHYSICS', C_DIM, C_BG, .false., .false.)
+        pos = pos + 17
         ! tabs
         do i = 1, ws%n_sess
             if (i == ws%active) then
@@ -215,9 +220,20 @@ contains
             if (pos > cols - 16) exit
         end do
         if (ws%scroll_mode) then
-            call con_write_at_s(max(0, cols - 11), rr, ' [SCROLL] ', C_WARN, C_BG, .true., .false.)
+            mode_label = ' SCROLLBACK '
+            call con_write_at_s(max(0, cols - len_trim(mode_label) - 1), rr, &
+                                mode_label, C_WARN, C_BG, .true., .false.)
         else
-            call con_write_at_s(max(0, cols - 11), rr, ' Ctrl+A AI', C_ACCENT2, C_BG, .false., .false.)
+            mode_label = ' LIVE '
+            call con_write_at_s(max(0, cols - len_trim(mode_label) - 1), rr, &
+                                mode_label, C_SUCCESS, C_BG, .true., .false.)
+        end if
+        ! A compact, non-blocking voice affordance makes the input model
+        ! discoverable while the shell remains the primary interaction.
+        right_label = '  VOICE READY  |  CTRL+SHIFT+A AI'
+        if (len_trim(right_label) + len_trim(mode_label) + 2 < cols - pos) then
+            call con_write_at_s(cols - len_trim(right_label) - len_trim(mode_label) - 2, rr, &
+                                right_label, C_ACCENT2, C_BG, .false., .false.)
         end if
     end subroutine
 
