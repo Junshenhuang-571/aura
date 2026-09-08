@@ -17,7 +17,7 @@ offline local AI assistant, and near-zero external runtime dependencies.
 | JSON config (`~/.config/aura/config.json`) | ✅ done (json-fortran-compatible format) |
 | SSH workspaces (system `ssh`) | ✅ saved remote workspace targets |
 | Speech-to-text | 🔌 external recorder + `transcribe-cli` adapter |
-| GTK3 GUI (gtk-fortran) | 🧩 skeleton in `src/aura_gui.f90` (see below) |
+| Desktop workbench GUI | ✅ Tkinter adapter with workflow/result controls |
 | Physics workbench manifest | ✅ templates, MPI/OpenMP, SLURM/local, sweeps, run tracking, result adapters |
 | fpm build | `fpm.toml` included; direct gfortran build also provided |
 
@@ -43,7 +43,7 @@ dependencies at runtime.
 ## Computational physics workbench
 
 The repository includes `aura-workbench.toml`, a dependency-free project
-manifest intended to be the first GUI-facing model for solver projects.  It
+manifest used by the desktop workbench GUI. It
 keeps project metadata, Fortran templates, compiler flags, MPI/OpenMP choices,
 external build/run/test commands, local or SLURM execution, parameter sweeps,
 run tracking, and result adapters for visualization, convergence checks, and
@@ -51,8 +51,8 @@ HDF5/NetCDF browsing in one inspectable file. Aura does **not** embed GTK,
 compilers, MPI, SLURM, HDF5/NetCDF, or a plotting library; commands are
 adapters to tools already installed on the host.
 
-The same manifest can be inspected or executed from the CLI while a future GUI
-uses the module API (`src/aura_workbench.f90`) to populate controls:
+The same manifest can be inspected or executed from the CLI, or opened in the
+desktop GUI:
 
 ```sh
 ./build/aura --workbench aura-workbench.toml summary
@@ -60,6 +60,7 @@ uses the module API (`src/aura_workbench.f90`) to populate controls:
 ./build/aura --workbench aura-workbench.toml run
 ./build/aura --workbench aura-workbench.toml test
 ./build/aura --workbench aura-workbench.toml monitor run-001
+./build/aura --gui
 ```
 
 The manifest uses small TOML sections (`project`, `toolchain`, `mpi`,
@@ -82,12 +83,16 @@ is not running.
 4. Give each sweep point a run ID and write solver output into its tracked
    directory for later visualization.
 
+The GUI runs build/run/test and configured result commands in a background
+thread, streams output into its run panel, lists sweep dimensions, and exposes
+MPI/OpenMP/SLURM settings. Configure `[results]` commands to connect
+matplotlib, ParaView, HDF5, or NetCDF tooling.
+
 This is a foundation, not a job database: the current CLI does not launch
 multiple sweep points automatically, stream scheduler logs, or parse result
-formats natively. The GTK module is still a host-integration skeleton, so an
-embedded plot canvas and native HDF5/NetCDF browser remain the next GUI
-milestone; the `[results]` adapters provide a portable fallback today. The
-parser intentionally supports the manifest subset above rather than all TOML.
+formats natively. The GUI intentionally uses external adapters rather than hard-linking large
+scientific libraries; the parser supports the manifest subset above rather
+than all TOML.
 MPI, OpenMP, SLURM, and GUI availability depend on external installations.
 
 ## Usage
@@ -207,16 +212,9 @@ are encoded in `csrc/aura_pty_bridge.c`:
 Default shell comes from `%COMSPEC%`. Verified end-to-end on Windows 10/11
 (see `test/e2e_final.f90`).
 
-## GTK GUI
+## Desktop workbench GUI
 
-`src/aura_gui.f90` contains the gtk-fortran binding subset and module scaffold.
-Full wiring (GtkNotebook tabs, GtkTextView per tab, Ctrl+A dialog,
-idle-loop drain via `g_timeout_add`) requires linking against gtk-fortran:
-
-```sh
-fpm build --flag "$(pkg-config --cflags gtk+-3.0-fortran)" \
-          --link-flag "$(pkg-config --libs gtk+-3.0-fortran)"
-```
-
-On hosts without GTK (e.g. this Windows box), `aura --gui` prints a notice and
-falls back to the CLI terminal, which exercises the identical session layer.
+`aura --gui` launches `tools/aura_workbench_gui.py` with Python's Tkinter
+desktop toolkit. Python 3.11+ is recommended for built-in `tomllib`; the
+scientific result tools remain configurable commands, so users can select
+their preferred matplotlib, ParaView, HDF5, or NetCDF stack.

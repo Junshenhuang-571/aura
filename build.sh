@@ -20,8 +20,8 @@ $FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_llm.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_keys.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_render.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_ai.f90
-$FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_gui.f90
 $FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 -ffree-line-length-none src/aura_workbench.f90
+$FC -c -std=f2018 -O2 -Wall -Jbuild -fmax-stack-var-size=1024 src/aura_gui.f90
 $CC -c -O2 csrc/aura_pty_bridge.c
 $CC -c -O2 csrc/aura_console_bridge.c
 $CC -c -O2 csrc/aura_net.c

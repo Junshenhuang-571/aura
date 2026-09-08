@@ -10,6 +10,7 @@ module aura_gui
     use aura_pty
     use aura_llm
     use aura_config
+    use aura_workbench
     implicit none
     private
 
@@ -73,10 +74,19 @@ contains
     function gui_main(cfg) result(rc)
         type(aura_cfg), intent(in) :: cfg
         integer :: rc
-        rc = 1
-        print *, 'aura GUI: requires gtk-fortran (GTK3). See README for build instructions.'
-        print *, 'Falling back to CLI mode...'
-        rc = -1   ! caller runs CLI mode instead
+        character(len=1024) :: command
+        integer :: exit_code, cmdstat
+        ! Use the portable desktop adapter by default. It keeps the core
+        ! dependency-free while providing a real GUI on Windows/Linux/macOS.
+        command = 'python tools/aura_workbench_gui.py'
+        call execute_command_line(trim(command), wait=.true., &
+                                  exitstat=exit_code, cmdstat=cmdstat)
+        if (cmdstat /= 0) then
+            print *, 'Aura GUI could not start: Python is unavailable.'
+            rc = -1
+        else
+            rc = exit_code
+        end if
     end function
 
 end module

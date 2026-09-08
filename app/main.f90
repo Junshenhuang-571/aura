@@ -20,6 +20,7 @@ program aura_main
     use aura_theme
     use aura_workspace
     use aura_workbench
+    use aura_gui
     implicit none
 
     integer, parameter :: MAX_SESS = 8
@@ -58,6 +59,11 @@ program aura_main
                 stop 0
             case ('--workbench')
                 call run_workbench_command()
+                stop 0
+            case ('--gui')
+                call cfg%load()
+                rc_dummy = gui_main(cfg)
+                if (rc_dummy /= 0) stop 1
                 stop 0
             end select
         end if
