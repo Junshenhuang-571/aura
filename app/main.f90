@@ -185,6 +185,13 @@ contains
             print '(A)', 'Run: '//trim(manifest%command('run', template))
             print '(A,I0)', 'Sweep points: ', manifest%sweep_count()
             print '(A)', 'Tracking: '//trim(manifest%tracking_directory)
+        case ('preview', 'dry-run')
+            print '(A)', 'Preview (no commands executed):'
+            print '(A)', 'Build: '//trim(manifest%command('build', template))
+            print '(A)', 'Run: '//trim(manifest%command('run', template))
+            print '(A)', 'Test: '//trim(manifest%command('test', template))
+        case ('sweep-plan')
+            call print_sweep_plan(manifest, template)
         case ('build', 'run', 'test', 'visualize', 'browse', 'monitor-results')
             if (trim(action) == 'run') then
                 cmd = manifest%command('run', template)
@@ -202,14 +209,43 @@ contains
             call manifest%read_run(trim(template), record, ok)
             if (ok) then
                 print '(A)', 'Run '//trim(record%id)//': '//trim(record%state)
+                print '(A)', 'Command: '//trim(record%command)
+                print '(A)', 'CWD: '//trim(record%cwd)
+                if (len_trim(record%params) > 0) print '(A)', 'Params: '//trim(record%params)
                 print '(A,I0)', 'Exit code: ', record%exit_code
+                if (len_trim(record%stdout_path) > 0) print '(A)', 'Stdout: '//trim(record%stdout_path)
+                if (len_trim(record%stderr_path) > 0) print '(A)', 'Stderr: '//trim(record%stderr_path)
                 if (len_trim(record%result_path) > 0) print '(A)', 'Result: '//trim(record%result_path)
             else
                 print '(A)', 'Run status not found.'
             end if
         case default
-            print '(A)', 'Usage: aura --workbench [manifest] [summary|build|run|test|visualize|browse|monitor] [template|run-id]'
+            print '(A)', 'Usage: aura --workbench [manifest] [summary|preview|dry-run|sweep-plan|'// &
+                'build|run|test|visualize|browse|monitor]'
         end select
+    end subroutine
+
+    subroutine print_sweep_plan(wb, selected_template)
+        type(wb_manifest), intent(in) :: wb
+        character(len=*), intent(in) :: selected_template
+        character(len=64), allocatable :: names(:)
+        character(len=256), allocatable :: values(:)
+        character(len=:), allocatable :: command, params
+        logical :: point_ok
+        integer :: i, ordinal
+        print '(A)', 'Sweep plan (no commands executed):'
+        do ordinal = 1, wb%sweep_count()
+            call wb%sweep_point(ordinal, names, values, point_ok)
+            if (.not. point_ok) cycle
+            params = ''
+            do i = 1, size(names)
+                if (i > 1) params = trim(params)//','
+                params = trim(params)//trim(names(i))//'='//trim(values(i))
+            end do
+            command = wb%sweep_command(ordinal, selected_template)
+            write (*, '(A,I0,A)') 'sweep-', ordinal, ': '//trim(params)
+            print '(A)', '  Run: '//trim(command)
+        end do
     end subroutine
 
     ! Legacy line-based mode kept for debugging / non-TTY environments.
