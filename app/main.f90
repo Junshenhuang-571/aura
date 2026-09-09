@@ -168,10 +168,21 @@ contains
         action = 'summary'
         template = ''
         run_id = 'cli-run'
-        if (command_argument_count() >= 2) call get_command_argument(2, path)
-        if (command_argument_count() >= 3) call get_command_argument(3, action)
-        if (command_argument_count() >= 4) call get_command_argument(4, template)
-        if (command_argument_count() >= 5) call get_command_argument(5, run_id)
+        if (command_argument_count() >= 2) then
+            call get_command_argument(2, action)
+            action = normalize_workbench_action(action)
+            if (.not. is_workbench_action(action)) then
+                path = action
+                action = 'summary'
+                if (command_argument_count() >= 3) call get_command_argument(3, action)
+                action = normalize_workbench_action(action)
+                if (command_argument_count() >= 4) call get_command_argument(4, template)
+                if (command_argument_count() >= 5) call get_command_argument(5, run_id)
+            else
+                if (command_argument_count() >= 3) call get_command_argument(3, template)
+                if (command_argument_count() >= 4) call get_command_argument(4, run_id)
+            end if
+        end if
         call manifest%load(trim(path), ok, message)
         if (.not. ok) then
             print '(A)', 'workbench: '//trim(message)
@@ -224,6 +235,25 @@ contains
                 'build|run|test|visualize|browse|monitor]'
         end select
     end subroutine
+
+    logical function is_workbench_action(value)
+        character(len=*), intent(in) :: value
+        select case (trim(value))
+        case ('summary', 'preview', 'dry-run', 'sweep-plan', 'build', 'run', 'test', &
+              'visualize', 'browse', 'monitor-results', 'monitor')
+            is_workbench_action = .true.
+        case default
+            is_workbench_action = .false.
+        end select
+    end function
+
+    function normalize_workbench_action(value) result(action)
+        character(len=*), intent(in) :: value
+        character(len=2048) :: action
+        action = trim(value)
+        if (len_trim(action) >= 2 .and. action(:2) == '--') action = action(3:)
+        action = trim(action)
+    end function
 
     subroutine print_sweep_plan(wb, selected_template)
         type(wb_manifest), intent(in) :: wb
