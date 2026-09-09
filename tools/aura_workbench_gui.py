@@ -32,6 +32,7 @@ class WorkbenchApp:
         self.results = self.manifest.get("results", {})
         self.tracking = self.manifest.get("tracking", {})
         self.output = tk.Text(root, bg="#081525", fg="#d9f3ff", insertbackground="white")
+        self.status_labels = {}
         self.build_ui()
 
     def load_manifest(self):
@@ -57,16 +58,23 @@ class WorkbenchApp:
         body.add(left, weight=1)
         body.add(right, weight=3)
 
-        ttk.Label(left, text=self.project.get("name", "Physics project"),
-                  font=("Segoe UI", 14, "bold")).pack(anchor="w", pady=(0, 8))
-        ttk.Label(left, text=f"Manifest: {self.manifest_path}").pack(anchor="w")
-        ttk.Label(left, text=f"Compiler: {self.manifest.get('toolchain', {}).get('compiler', '')}").pack(anchor="w")
+        self.status_labels["project"] = ttk.Label(
+            left, text=self.project.get("name", "Physics project"),
+            font=("Segoe UI", 14, "bold"))
+        self.status_labels["project"].pack(anchor="w", pady=(0, 8))
+        self.status_labels["manifest"] = ttk.Label(left, text="")
+        self.status_labels["manifest"].pack(anchor="w")
+        self.status_labels["compiler"] = ttk.Label(left, text="")
+        self.status_labels["compiler"].pack(anchor="w")
         mpi = self.manifest.get("mpi", {})
         omp = self.manifest.get("openmp", {})
         scheduler = self.manifest.get("scheduler", {})
-        ttk.Label(left, text=f"MPI: {'on' if mpi.get('enabled') else 'off'} ({mpi.get('ranks', 1)} ranks)").pack(anchor="w")
-        ttk.Label(left, text=f"OpenMP: {'on' if omp.get('enabled') else 'off'} ({omp.get('threads', 1)} threads)").pack(anchor="w")
-        ttk.Label(left, text=f"Scheduler: {scheduler.get('kind', 'local')}").pack(anchor="w", pady=(0, 12))
+        self.status_labels["mpi"] = ttk.Label(left, text="")
+        self.status_labels["mpi"].pack(anchor="w")
+        self.status_labels["openmp"] = ttk.Label(left, text="")
+        self.status_labels["openmp"].pack(anchor="w")
+        self.status_labels["scheduler"] = ttk.Label(left, text="")
+        self.status_labels["scheduler"].pack(anchor="w", pady=(0, 12))
 
         actions = ttk.LabelFrame(left, text="Workflow", padding=8)
         actions.pack(fill="x")
@@ -75,15 +83,18 @@ class WorkbenchApp:
                              ("Check convergence", "monitor")):
             ttk.Button(actions, text=label, style="Accent.TButton",
                        command=lambda s=stage: self.execute(s)).pack(fill="x", pady=2)
+        ttk.Button(actions, text="Preview (no execution)",
+                   command=self.preview).pack(fill="x", pady=2)
 
         sweeps = ttk.LabelFrame(left, text="Parameter sweep", padding=8)
         sweeps.pack(fill="both", expand=True, pady=(12, 0))
         self.sweep_list = tk.Listbox(sweeps, height=8)
         self.sweep_list.pack(fill="both", expand=True)
-        for name, data in self.manifest.get("sweep", {}).items():
-            self.sweep_list.insert("end", f"{name}: {', '.join(map(str, data.get('values', [])))}")
+        self.run_list = tk.Listbox(sweeps, height=6)
+        self.run_list.pack(fill="both", expand=True, pady=(8, 0))
 
         self.output.pack(in_=right, fill="both", expand=True)
+        self.refresh_manifest_state()
         self.write("Ready. Configure [results] commands for plots and HDF5/NetCDF browsing.\n")
 
     def write(self, text):
@@ -96,12 +107,62 @@ class WorkbenchApp:
             self.manifest_path = Path(selected)
             try:
                 self.manifest = self.load_manifest()
-                self.project = self.manifest.get("project", {})
-                self.commands = self.manifest.get("commands", {})
-                self.results = self.manifest.get("results", {})
+                self.refresh_manifest_state()
                 self.write(f"\nLoaded {selected}\n")
             except Exception as exc:
                 messagebox.showerror("Manifest error", str(exc))
+
+    def refresh_manifest_state(self):
+        self.project = self.manifest.get("project", {})
+        self.commands = self.manifest.get("commands", {})
+        self.results = self.manifest.get("results", {})
+        self.tracking = self.manifest.get("tracking", {})
+        if not self.status_labels:
+            return
+        mpi = self.manifest.get("mpi", {})
+        omp = self.manifest.get("openmp", {})
+        scheduler = self.manifest.get("scheduler", {})
+        self.status_labels["project"].configure(
+            text=self.project.get("name", "Physics project"))
+        self.status_labels["manifest"].configure(text=f"Manifest: {self.manifest_path}")
+        self.status_labels["compiler"].configure(
+            text=f"Compiler: {self.manifest.get('toolchain', {}).get('compiler', '')}")
+        self.status_labels["mpi"].configure(
+            text=f"MPI: {'on' if mpi.get('enabled') else 'off'} ({mpi.get('ranks', 1)} ranks)")
+        self.status_labels["openmp"].configure(
+            text=f"OpenMP: {'on' if omp.get('enabled') else 'off'} ({omp.get('threads', 1)} threads)")
+        self.status_labels["scheduler"].configure(
+            text=f"Scheduler: {scheduler.get('kind', 'local')}")
+        self.sweep_list.delete(0, "end")
+        for name, data in self.manifest.get("sweep", {}).items():
+            self.sweep_list.insert("end", f"{name}: {', '.join(map(str, data.get('values', [])))}")
+        self.refresh_runs()
+
+    def refresh_runs(self):
+        self.run_list.delete(0, "end")
+        directory = Path(self.tracking.get("directory", ".aura/runs"))
+        if not directory.is_absolute():
+            directory = Path(self.project.get("root", ".")) / directory
+        if not directory.exists():
+            return
+        for status_path in sorted(directory.glob("*/status.toml")):
+            record = self.read_run_record(status_path)
+            self.run_list.insert(
+                "end", f"{record.get('id', status_path.parent.name)}: "
+                f"{record.get('state', 'unknown')} (exit {record.get('exit-code', '-1')})")
+
+    @staticmethod
+    def read_run_record(path):
+        record = {}
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            value = value.strip()
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1].replace('\\"', '"').replace("\\\\", "\\")
+            record[key.strip()] = value
+        return record
 
     def command_for(self, stage):
         if stage in self.commands:
@@ -149,6 +210,19 @@ class WorkbenchApp:
         command = self.substitutions(command)
         self.write(f"\n$ {command}\n")
         threading.Thread(target=self.run_command, args=(command,), daemon=True).start()
+
+    def preview(self):
+        self.write("\nPreview (no commands executed):\n")
+        for stage in ("build", "run", "test"):
+            command = self.command_for(stage)
+            self.write(f"{stage.capitalize()}: {self.substitutions(command) if command else '(not configured)'}\n")
+        self.write(f"Sweep points: {self.sweep_count()}\n")
+
+    def sweep_count(self):
+        count = 1
+        for data in self.manifest.get("sweep", {}).values():
+            count *= max(1, len(data.get("values", [])))
+        return count
 
     def visualize_csv(self):
         path = filedialog.askopenfilename(
