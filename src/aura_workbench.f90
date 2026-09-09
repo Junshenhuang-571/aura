@@ -25,7 +25,8 @@ module aura_workbench
     end type
 
     type, public :: wb_run_record
-        character(len=:), allocatable :: id, state, command, result_path
+        character(len=:), allocatable :: id, state, command, cwd, params
+        character(len=:), allocatable :: stdout_path, stderr_path, result_path
         integer :: exit_code = -1
     end type
 
@@ -60,6 +61,7 @@ module aura_workbench
         procedure :: execute => wb_execute
         procedure :: sweep_count => wb_sweep_count
         procedure :: sweep_point => wb_sweep_point
+        procedure :: sweep_command => wb_sweep_command
         procedure :: start_run => wb_start_run
         procedure :: finish_run => wb_finish_run
         procedure :: read_run => wb_read_run
@@ -243,18 +245,60 @@ contains
         character(len=:), allocatable, intent(out), optional :: message
         character(len=:), allocatable :: why
         ok = .true.; why = ''
-        if (len_trim(self%name) == 0) then
+        if (len_trim(self%version) == 0) then
+            ok = .false.; why = 'project.version must not be empty'
+        else if (len_trim(self%name) == 0) then
             ok = .false.; why = 'project.name must not be empty'
+        else if (len_trim(self%root) == 0) then
+            ok = .false.; why = 'project.root must not be empty'
+        else if (len_trim(self%compiler) == 0) then
+            ok = .false.; why = 'toolchain.compiler must not be empty'
         else if (self%n_templates < 1) then
             ok = .false.; why = 'at least one template is required'
+        else if (find_template(self, self%default_template) == 0) then
+            ok = .false.; why = 'project.default-template must name a template'
         else if (self%mpi_ranks < 1) then
             ok = .false.; why = 'mpi.ranks must be positive'
         else if (self%openmp_threads < 1) then
             ok = .false.; why = 'openmp.threads must be positive'
+        else if (self%scheduler_cpus < 1) then
+            ok = .false.; why = 'scheduler.cpus-per-task must be positive'
         else if (self%scheduler_kind /= 'local' .and. self%scheduler_kind /= 'slurm') then
             ok = .false.; why = 'scheduler.kind must be local or slurm'
+        else if (self%scheduler_kind == 'slurm' .and. len_trim(self%scheduler_command) == 0) then
+            ok = .false.; why = 'scheduler.command is required for slurm'
+        else if (len_trim(self%tracking_directory) == 0) then
+            ok = .false.; why = 'tracking.directory must not be empty'
+        else if (len_trim(self%build_command) == 0 .or. len_trim(self%run_command) == 0) then
+            ok = .false.; why = 'commands.build and commands.run are required'
+        else
+            call validate_children(self, ok, why)
         end if
         if (present(message)) message = why
+    contains
+        subroutine validate_children(manifest, valid, reason)
+            class(wb_manifest), intent(in) :: manifest
+            logical, intent(out) :: valid
+            character(len=:), allocatable, intent(out) :: reason
+            integer :: i
+            valid = .true.; reason = ''
+            do i = 1, manifest%n_templates
+                if (len_trim(manifest%templates(i)%name) == 0) then
+                    valid = .false.; reason = 'template name must not be empty'; return
+                end if
+                if (len_trim(manifest%templates(i)%source_dir) == 0) then
+                    valid = .false.; reason = 'template.source-dir must not be empty'; return
+                end if
+            end do
+            do i = 1, manifest%n_sweeps
+                if (len_trim(manifest%sweeps(i)%name) == 0) then
+                    valid = .false.; reason = 'sweep name must not be empty'; return
+                end if
+                if (manifest%sweeps(i)%n_values < 1) then
+                    valid = .false.; reason = 'sweep.'//trim(manifest%sweeps(i)%name)//'.values must not be empty'; return
+                end if
+            end do
+        end subroutine
     end subroutine
 
     function wb_command(self, stage, template_name) result(command)
@@ -373,27 +417,44 @@ contains
         end do
     end subroutine
 
-    subroutine wb_start_run(self, run_id, command, record, ok)
+    function wb_sweep_command(self, ordinal, template_name) result(command)
+        class(wb_manifest), intent(in) :: self
+        integer, intent(in) :: ordinal
+        character(len=*), intent(in), optional :: template_name
+        character(len=:), allocatable :: command
+        character(len=64), allocatable :: names(:)
+        character(len=256), allocatable :: values(:)
+        logical :: ok
+        integer :: i
+        command = self%command('run', template_name)
+        call self%sweep_point(ordinal, names, values, ok)
+        if (.not. ok) then
+            command = ''
+            return
+        end if
+        do i = 1, size(names)
+            call replace(command, '{'//trim(names(i))//'}', trim(values(i)))
+        end do
+    end function
+
+    subroutine wb_start_run(self, run_id, command, record, ok, cwd, params)
         class(wb_manifest), intent(in) :: self
         character(len=*), intent(in) :: run_id, command
         type(wb_run_record), intent(out) :: record
         logical, intent(out), optional :: ok
-        character(len=:), allocatable :: dir, path
-        integer :: u, ios
+        character(len=*), intent(in), optional :: cwd, params
+        character(len=:), allocatable :: dir
         record%id = trim(run_id); record%state = 'running'; record%command = trim(command)
-        record%exit_code = -1
+        record%cwd = trim(self%root); record%params = ''
+        if (present(cwd)) record%cwd = trim(cwd)
+        if (present(params)) record%params = trim(params)
         dir = trim(self%tracking_directory)//'/'//trim(run_id)
         record%result_path = dir
+        record%stdout_path = trim(dir)//'/stdout.log'
+        record%stderr_path = trim(dir)//'/stderr.log'
+        record%exit_code = -1
         call make_directory(dir)
-        path = trim(dir)//'/status.toml'
-        open (newunit=u, file=path, status='replace', action='write', iostat=ios)
-        if (ios == 0) then
-            write (u, '(A)') 'id = "'//toml_escape(run_id)//'"'
-            write (u, '(A)') 'state = "running"'
-            write (u, '(A)') 'command = "'//toml_escape(command)//'"'
-            close (u)
-        end if
-        if (present(ok)) ok = ios == 0
+        call write_run_record(self, record, ok)
     end subroutine
 
     subroutine wb_finish_run(self, run_id, exit_code, state, result_file, ok)
@@ -404,11 +465,13 @@ contains
         logical, intent(out), optional :: ok
         type(wb_run_record) :: record
         logical :: read_ok
-        character(len=:), allocatable :: path, final_state
-        integer :: u, ios
+        character(len=:), allocatable :: final_state
         call self%read_run(run_id, record, read_ok)
         if (.not. read_ok) then
-            record%id = trim(run_id); record%command = ''
+            record%id = trim(run_id); record%command = ''; record%cwd = trim(self%root)
+            record%params = ''; record%result_path = trim(self%tracking_directory)//'/'//trim(run_id)
+            record%stdout_path = trim(record%result_path)//'/stdout.log'
+            record%stderr_path = trim(record%result_path)//'/stderr.log'
         end if
         if (present(state)) then
             final_state = trim(state)
@@ -417,17 +480,9 @@ contains
         else
             final_state = 'failed'
         end if
-        path = trim(self%tracking_directory)//'/'//trim(run_id)//'/status.toml'
-        open (newunit=u, file=path, status='replace', action='write', iostat=ios)
-        if (ios == 0) then
-            write (u, '(A)') 'id = "'//toml_escape(run_id)//'"'
-            write (u, '(A)') 'state = "'//toml_escape(final_state)//'"'
-            write (u, '(A,I0)') 'exit-code = ', exit_code
-            write (u, '(A)') 'command = "'//toml_escape(record%command)//'"'
-            if (present(result_file)) write (u, '(A)') 'result = "'//toml_escape(result_file)//'"'
-            close (u)
-        end if
-        if (present(ok)) ok = ios == 0
+        record%id = trim(run_id); record%state = final_state; record%exit_code = exit_code
+        if (present(result_file)) record%result_path = trim(result_file)
+        call write_run_record(self, record, ok)
     end subroutine
 
     subroutine wb_read_run(self, run_id, record, ok)
@@ -437,7 +492,8 @@ contains
         logical, intent(out) :: ok
         integer :: u, ios, eq
         character(len=1024) :: line, key, value
-        record%id = trim(run_id); record%state = ''; record%command = ''; record%result_path = ''
+        record%id = trim(run_id); record%state = ''; record%command = ''; record%cwd = ''
+        record%params = ''; record%stdout_path = ''; record%stderr_path = ''; record%result_path = ''
         record%exit_code = -1; ok = .false.
         open (newunit=u, file=trim(self%tracking_directory)//'/'//trim(run_id)//'/status.toml', &
               status='old', action='read', iostat=ios)
@@ -450,13 +506,43 @@ contains
             if (eq <= 1) cycle
             key = lower(trim(line(:eq-1))); value = trim(line(eq+1:))
             select case (trim(key))
+            case ('id'); record%id = unquote(value)
             case ('state'); record%state = unquote(value)
             case ('command'); record%command = unquote(value)
+            case ('cwd'); record%cwd = unquote(value)
+            case ('params'); record%params = unquote(value)
+            case ('stdout'); record%stdout_path = unquote(value)
+            case ('stderr'); record%stderr_path = unquote(value)
             case ('result'); record%result_path = unquote(value)
             case ('exit-code'); read(value, *, iostat=ios) record%exit_code
             end select
         end do
         close (u)
+    end subroutine
+
+    subroutine write_run_record(self, record, ok)
+        class(wb_manifest), intent(in) :: self
+        type(wb_run_record), intent(in) :: record
+        logical, intent(out), optional :: ok
+        character(len=:), allocatable :: path, dir
+        integer :: u, ios
+        dir = trim(self%tracking_directory)//'/'//trim(record%id)
+        call make_directory(dir)
+        path = trim(dir)//'/status.toml'
+        open (newunit=u, file=path, status='replace', action='write', iostat=ios)
+        if (ios == 0) then
+            write (u, '(A)') 'id = "'//toml_escape(record%id)//'"'
+            write (u, '(A)') 'state = "'//toml_escape(record%state)//'"'
+            write (u, '(A)') 'command = "'//toml_escape(record%command)//'"'
+            write (u, '(A)') 'cwd = "'//toml_escape(record%cwd)//'"'
+            write (u, '(A)') 'params = "'//toml_escape(record%params)//'"'
+            write (u, '(A,I0)') 'exit-code = ', record%exit_code
+            write (u, '(A)') 'stdout = "'//toml_escape(record%stdout_path)//'"'
+            write (u, '(A)') 'stderr = "'//toml_escape(record%stderr_path)//'"'
+            write (u, '(A)') 'result = "'//toml_escape(record%result_path)//'"'
+            close (u)
+        end if
+        if (present(ok)) ok = ios == 0
     end subroutine
 
     subroutine add_template(self, name)

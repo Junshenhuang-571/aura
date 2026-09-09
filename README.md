@@ -56,6 +56,8 @@ desktop GUI:
 
 ```sh
 ./build/aura --workbench aura-workbench.toml summary
+./build/aura --workbench aura-workbench.toml preview
+./build/aura --workbench aura-workbench.toml sweep-plan
 ./build/aura --workbench aura-workbench.toml build
 ./build/aura --workbench aura-workbench.toml run
 ./build/aura --workbench aura-workbench.toml test
@@ -73,7 +75,10 @@ points.  `{mpi_prefix}`, `{omp_prefix}`, `{source_dir}`, `{main}`, and other
 documented substitutions are expanded before an external command is run.
 Run status is recorded under `tracking.directory/<run-id>/` as
 `status.toml`, allowing a monitor panel to remain useful even when the solver
-is not running.
+is not running. `preview` (also accepted as `dry-run`) prints resolved build,
+run, and test commands without executing them. `sweep-plan` prints deterministic
+`sweep-N` IDs, parameter values, and resolved run commands without creating
+tracking directories.
 
 ### Workbench workflow and limitations
 
